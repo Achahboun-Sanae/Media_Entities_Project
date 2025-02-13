@@ -1,37 +1,39 @@
 from datetime import datetime
 
-def parse_article(article):
+from bs4 import BeautifulSoup
+import requests
+
+def parse_article_page(article_url):
     """
-    Parse un article HTML de Hespress et retourne un dictionnaire structuré.
-    :param article: Un élément BeautifulSoup représentant un article.
-    :return: Un dictionnaire contenant les données de l'article.
+    Extrait les détails d'un article à partir de son URL.
+    :param article_url: L'URL de l'article.
+    :return: Un dictionnaire contenant les détails de l'article.
     """
     try:
-        # Extraire le titre
-        title = article.find("h1", class_="post-title").text.strip()
+        # 1. Récupérer le contenu de la page de l'article
+        response = requests.get(article_url, headers={"User-Agent": "Mozilla/5.0"})
+        response.raise_for_status()
 
-        # Extraire le lien
-        link = article.find("a")["href"]
+        # 2. Parser le contenu HTML
+        soup = BeautifulSoup(response.text, "html.parser")
 
-        # Extraire le contenu (tous les paragraphes dans la div "article-content")
-        content_div = article.find("div", class_="article-content")
-        content = " ".join(p.text.strip() for p in content_div.find_all("p"))
-
-        # Extraire la date
-        date_span = article.find("span", class_="date-post")
+        # 3. Extraire les détails de l'article
+        title = soup.find("h1", class_="post-title").text.strip()
+        content = " ".join(p.text.strip() for p in soup.find("div", class_="article-content").find_all("p"))
+        date_span = soup.find("span", class_="date-post")
         date = clean_date(date_span.text.strip()) if date_span else datetime.now().strftime("%Y-%m-%d")
 
-        # Retourner les données structurées
+        # 4. Retourner les données structurées
         return {
             "titre": title,
             "contenu": content,
             "source": "hespress",
             "date": date,
-            "link": link
+            "link": article_url
         }
 
     except Exception as e:
-        print(f"Erreur lors du parsing d'un article : {e}")
+        print(f"Erreur lors de l'extraction de l'article {article_url} : {e}")
         return None
 
 def clean_date(date_str):
