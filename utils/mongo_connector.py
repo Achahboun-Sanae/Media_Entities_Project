@@ -10,14 +10,29 @@ def get_database():
     client = get_mongo_client()
     return client[DATABASE_NAME]
 
-def save_to_mongo(data):
+
+
+def save_to_mongo(article):
     """
-    Sauvegarde des données dans la collection "articles".
-    :param data: Données à sauvegarder (liste de dictionnaires)
+    Sauvegarde un article dans MongoDB.
+    :param article: Un dictionnaire contenant les détails de l'article.
     """
-    db = get_database()
-    collection = db[COLLECTION_NAME]
-    return collection.insert_many(data)
+    try:
+        # Connexion à MongoDB
+        client = MongoClient(MONGO_URI)
+        db = client[DATABASE_NAME]
+        collection = db[COLLECTION_NAME]
+
+        # Vérifier si l'article existe déjà (basé sur le lien)
+        if collection.find_one({"link": article["link"]}):
+            print(f"Article déjà existant : {article['link']}")
+        else:
+            # Insérer l'article dans la collection
+            collection.insert_one(article)
+            print(f"Article sauvegardé : {article['link']}")
+
+    except Exception as e:
+        print(f"Erreur lors de la sauvegarde dans MongoDB : {e}")
 
 def find_in_mongo(query={}):
     """
