@@ -1,59 +1,58 @@
 import requests
 from bs4 import BeautifulSoup
-from pymongo import MongoClient
 import time
 import random
+import sys
+import os
 
-# Configuration MongoDB
-MONGO_URI = "mongodb://localhost:27017/"
-DATABASE_NAME = "medias_maroc"
-COLLECTION_NAME = "articles"
+# Ajouter le répertoire racine du projet au chemin d'accès pour les imports
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
-# Connexion à MongoDB
-client = MongoClient(MONGO_URI)
-db = client[DATABASE_NAME]
-collection = db[COLLECTION_NAME]
+from config.mongodb import get_mongo_collection  # Importer la configuration MongoDB
 
-# Headers pour éviter d'être bloqué
+# Connexion à la collection MongoDB "articles_ar"
+collection = get_mongo_collection("articles_ar")
+
+# Définition des headers pour simuler un vrai navigateur et éviter les blocages
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
 }
 
-# Catégories à scraper
-CATEGORIES = ["national"]
+# Liste des catégories d'articles à scraper
+CATEGORIES = ["culture","Economy","national","world"]
 
-# Fonction pour récupérer les URLs des articles de toutes les pages
+# Fonction pour récupérer les URLs des articles à partir des pages de catégories
 def get_article_urls():
     base_url = "https://www.akhbarona.com"
     article_urls = set()
     
     for category in CATEGORIES:
-        page = 1
+        page = 1  # Initialisation du compteur de pages
         
-        while True:  # Continue jusqu'à ce que la page soit introuvable
+        while True:  # Boucle infinie, s'arrêtera si une page est introuvable
             url = f"{base_url}/{category}/index.{page}.html"
             print(f"🔍 Scraping {url}...")
 
             response = requests.get(url, headers=HEADERS)
 
-            if response.status_code == 404:
+            if response.status_code == 404:  # Si la page n'existe pas, arrêter le scraping de cette catégorie
                 print(f"⚠️ Page {page} pour {category.upper()} introuvable (404), arrêt.")
-                break  # Arrêter cette catégorie
+                break
 
-            if response.status_code != 200:
+            if response.status_code != 200:  # Si une autre erreur HTTP survient
                 print(f"❌ Erreur {response.status_code} sur {url}, on passe à la suivante.")
                 break
 
             soup = BeautifulSoup(response.text, "html.parser")
 
-            # Trouver tous les liens des articles
+            # Extraction des liens d'articles
             articles = soup.find_all("a", href=True)
             found = 0  # Compteur d'articles trouvés
 
             for article in articles:
                 href = article["href"]
 
-                # Vérifier si le lien correspond à un article valide
+                # Vérification si l'URL correspond bien à un article
                 if "/articles/" in href or any(cat in href for cat in CATEGORIES):
                     full_url = "https://www.akhbarona.com" + href if href.startswith("/") else href
                     if full_url not in article_urls:
@@ -62,17 +61,16 @@ def get_article_urls():
 
             print(f"📄 {category.upper()} - Page {page} scannée, {found} nouveaux articles trouvés. Total: {len(article_urls)} articles.")
 
-            # Si aucune nouvelle URL trouvée, c'est peut-être la fin de la catégorie
-            if found == 0:
+            if found == 0:  # Si aucune nouvelle URL trouvée, on suppose la fin des articles
                 print(f"🚫 Aucune nouvelle URL trouvée sur {category.upper()} page {page}, arrêt de la catégorie.")
                 break
 
-            page += 1
-            time.sleep(random.uniform(1, 3))  # Pause aléatoire pour éviter de se faire bloquer
+            page += 1  # Passer à la page suivante
+            time.sleep(random.uniform(1, 3))  # Pause aléatoire pour éviter le blocage du site
 
     return list(article_urls)
 
-# Fonction pour scraper un article
+# Fonction pour scraper le contenu d'un article
 def scrape_article(url):
     try:
         response = requests.get(url, headers=HEADERS)
@@ -87,15 +85,15 @@ def scrape_article(url):
 
         soup = BeautifulSoup(response.text, "html.parser")
 
-        # Titre
+        # Extraction du titre de l'article
         titre_tag = soup.find("h1", class_="artical-content-heads")
         titre = titre_tag.text.strip() if titre_tag else "Titre inconnu"
 
-        # Contenu
+        # Extraction du contenu de l'article
         contenu_div = soup.find("div", class_="bodystr")
         contenu = " ".join([p.text.strip() for p in contenu_div.find_all("p")]) if contenu_div else "Contenu non disponible"
 
-        # Vérifier si l'article est déjà en base de données
+        # Vérification si l'article est déjà enregistré dans la base de données
         if collection.find_one({"url": url}):
             print(f"⚠ Article déjà enregistré : {titre}")
             return None
@@ -112,28 +110,27 @@ def scrape_article(url):
         print(f"⚠ Erreur lors du scraping de {url}: {e}")
         return None
 
-
-# Récupérer les URLs des articles
+# Récupération des URLs des articles
 article_urls = get_article_urls()
 print(f"✅ {len(article_urls)} articles trouvés. Début du scraping...")
 
-# Scraper chaque article
+# Scraper et stocker les articles dans MongoDB
 articles = []
 for i, url in enumerate(article_urls, 1):
     article = scrape_article(url)
     if article:
         articles.append(article)
 
-    # Insérer dans MongoDB par lots de 100
+    # Insérer les articles en lots de 100 pour optimiser l'accès à la base de données
     if len(articles) >= 100:
         collection.insert_many(articles)
         print(f"💾 {len(articles)} articles enregistrés dans MongoDB.")
-        articles = []  # Réinitialiser la liste
+        articles = []  # Réinitialiser la liste temporaire
 
-    # Pause aléatoire pour éviter de se faire bloquer
+    # Pause aléatoire entre les requêtes pour éviter d'être détecté comme bot
     time.sleep(random.uniform(1, 3))
 
-# Insérer les derniers articles restants
+# Insérer les derniers articles restants dans MongoDB
 if articles:
     collection.insert_many(articles)
     print(f"💾 {len(articles)} derniers articles enregistrés dans MongoDB.")
