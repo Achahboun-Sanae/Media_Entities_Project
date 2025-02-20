@@ -3,10 +3,13 @@ import requests
 from bs4 import BeautifulSoup
 import sys
 import os
+from datetime import datetime
 
-# Ajouter le répertoire racine du projet au chemin d'accès pour permettre les imports personnalisés
+
+# Ajouter le répertoire racine du projet au chemin d'accès pour les imports
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
-from config.mongodb import get_mongo_collection  # Import de la fonction pour récupérer la collection MongoDB
+
+from config.mongo_atlass import get_mongo_atlass_collection  # Importer la configuration MongoDB
 
 
 def extract_urls_from_sitemap(sitemap_url):
@@ -42,6 +45,7 @@ def extract_urls_from_sitemap(sitemap_url):
         print(f"❌ Erreur lors de l'extraction du sitemap {sitemap_url}: {e}")
         return []
 
+
 # URL du sitemap principal
 sitemap_index = "https://fr.hespress.com/sitemap.xml"
 sub_sitemaps = extract_urls_from_sitemap(sitemap_index)
@@ -49,7 +53,7 @@ print(f"Sous-sitemaps extraits : {sub_sitemaps}")
 
 # Extraction de toutes les URLs d'articles (limite : 8000 articles)
 all_articles = []
-max_articles = 8000
+max_articles = 6000
 
 for sitemap in sub_sitemaps:
     if len(all_articles) >= max_articles:
@@ -57,7 +61,7 @@ for sitemap in sub_sitemaps:
     extracted_urls = extract_urls_from_sitemap(sitemap)
     all_articles.extend(extracted_urls)
 
-# Limiter la liste des articles à 8000
+# Limiter la liste des articles à 6000
 all_articles = all_articles[:max_articles]
 print(f"Nombre total d'articles trouvés : {len(all_articles)}")
 
@@ -67,8 +71,7 @@ else:
     print("Aucune URL d'article trouvée.")
 
 # Connexion à la collection MongoDB "articles_fr"
-collection = get_mongo_collection("articles_fr")
-
+collection = get_mongo_atlass_collection("articles_fr")
 
 def scrape_article(url):
     """
@@ -92,8 +95,22 @@ def scrape_article(url):
         titre = titre.text.strip() if titre else "Titre inconnu"
 
         # Extraction de la date de publication
-        time_tag = soup.find("time", class_="date-post")
-        date = time_tag["datetime"] if time_tag and time_tag.get("datetime") else "Date inconnue"
+        time_tag = soup.find("span", class_="date-post")
+        if time_tag:
+            formatted_date = time_tag.text.strip()  # Extraire la date directement sans conversion
+        else:
+            formatted_date = "Date inconnue"
+
+        # Extraction de la catégorie depuis le breadcrumb (2ème <li> de classe 'breadcrumb-item')
+        breadcrumb = soup.find("ol", class_="breadcrumb")
+        if breadcrumb:
+            breadcrumb_items = breadcrumb.find_all("li", class_="breadcrumb-item")
+            if len(breadcrumb_items) > 1:
+                category = breadcrumb_items[1].text.strip()  # Catégorie dans le 2ème <li>
+            else:
+                category = "Catégorie inconnue"
+        else:
+            category = "Catégorie inconnue"
 
         # Extraction de l'auteur
         auteur_span = soup.find("span", class_="author")
@@ -107,8 +124,12 @@ def scrape_article(url):
         if titre == "Titre inconnu":
             print(f"⚠️ Article ignoré (titre inconnu) : {url}")
             return
-
-        if "inconnu" in [date, auteur, contenu]:
+        if contenu == "Contenu non disponible":
+            return None
+        if contenu == "":
+            return None
+        
+        if "inconnu" in [formatted_date, auteur]:
             print(f"⚠️ Article avec informations manquantes : {url}")
             return
 
@@ -123,6 +144,8 @@ def scrape_article(url):
             "titre": titre,
             "auteur": auteur,
             "contenu": contenu,
+            "date": formatted_date,
+            "categorie": category,
             "source": "hespress_fr"
         }
 
@@ -132,6 +155,7 @@ def scrape_article(url):
     
     except Exception as e:
         print(f"❌ Erreur lors du scraping de l'article {url}: {e}")
+
 
 # Scraper et enregistrer chaque article dans la base de données
 for url in all_articles:
