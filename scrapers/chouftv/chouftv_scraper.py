@@ -5,113 +5,126 @@ import time
 import random
 import sys
 import os
+from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor
 
-# Ajouter le répertoire racine du projet au chemin d'accès pour permettre les imports personnalisés
+# Ajout du chemin du dossier parent pour l'importation des modules personnalisés
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
-from config.mongodb import get_mongo_collection  # Import de la fonction pour récupérer la collection MongoDB
+from config.mongo_atlass import get_mongo_atlass_collection
 
-# Connexion à la collection MongoDB "articles_fr"
-collection = get_mongo_collection("articles_fr")
+# Connexion à la collection MongoDB pour stocker les articles
+collection = get_mongo_atlass_collection("articles_ar")
 
-# Headers pour éviter d'être bloqué
+# Définition de l'en-tête HTTP pour éviter le blocage par le site web
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, comme Gecko) Chrome/91.0.4472.124 Safari/537.36"
 }
 
-# Fonction pour récupérer les URLs des articles
-def get_article_urls(max_articles=5120):
+def get_article_urls(max_articles=6000):
+    """
+    Récupère les URLs des articles en parcourant les pages d'index.
+    
+    :param max_articles: Nombre maximal d'articles à récupérer.
+    :return: Liste des URLs des articles trouvés.
+    """
     base_url = "https://chouftv.ma/press/page/"
     article_urls = set()
     page = 1
 
     while len(article_urls) < max_articles:
-        url = f"{base_url}{page}"
-        response = requests.get(url, headers=HEADERS)
-
+        response = requests.get(f"{base_url}{page}", headers=HEADERS)
         if response.status_code != 200:
-            print(f"❌ Erreur {response.status_code} en accédant à {url}")
+            print(f"❌ Erreur {response.status_code} sur {base_url}{page}")
             break
 
         soup = BeautifulSoup(response.text, "html.parser")
-        links = soup.find_all("a", href=True)
-
-        for link in links:
-            href = link["href"]
-            if "/press/" in href and href not in article_urls:
-                article_urls.add(href)
-
+        
+        # Extraction des liens vers les articles
+        article_urls.update(
+            {link["href"] for link in soup.find_all("a", href=True) if "/press/" in link["href"]}
+        )
+        
         print(f"📄 Page {page} scannée, {len(article_urls)} articles trouvés.")
         page += 1
 
-        time.sleep(random.uniform(1, 3))  # Pause aléatoire pour éviter le bannissement
-
         if len(article_urls) >= max_articles:
             break
-
+    
     return list(article_urls)[:max_articles]
 
-
-# Fonction pour scraper un article
 def scrape_article(url):
+    """
+    Extrait les informations d'un article donné par son URL.
+    
+    :param url: URL de l'article à scraper.
+    :return: Dictionnaire contenant les informations de l'article ou None en cas d'échec.
+    """
     try:
-        response = requests.get(url, headers=HEADERS)
-
+        response = requests.get(url, headers=HEADERS, timeout=5)
         if response.status_code != 200:
-            print(f"❌ Erreur {response.status_code} sur {url}")
             return None
 
         soup = BeautifulSoup(response.text, "html.parser")
-
-        # Titre
-        titre_tag = soup.find("h1", class_="title-full-content")
-        titre = titre_tag.text.strip() if titre_tag else "Titre inconnu"
-
-        # Contenu
-        contenu_div = soup.find("div", class_="full-content")
-        contenu = " ".join([p.text.strip() for p in contenu_div.find_all("p")]) if contenu_div else "Contenu non disponible"
-
-        # Vérification de doublon
-        if collection.find_one({"url": url}):
-            print(f"⚠ Article déjà enregistré : {titre}")
+        
+        # Extraction du titre
+        titre = soup.select_one("h1.title-full-content")
+        titre = titre.text.strip() if titre else "Titre inconnu"
+        
+        # Extraction du contenu de l'article
+        contenu_div = soup.select_one("div.full-content")
+        contenu = " ".join(p.text.strip() for p in contenu_div.find_all("p")) if contenu_div else "Contenu non disponible"
+        
+        # Vérification si le contenu est vide ou indisponible
+        if contenu in ["", "Contenu non disponible"]:
             return None
-
-        # Stocker l'article
+        
+        # Extraction de la date
+        date_tag = soup.select_one("div.left-info time")
+        date_text = date_tag.text.strip() if date_tag else "Date inconnue"
+        try:
+            date_formatee = datetime.strptime(date_text, "%A %d %B %Y | %H:%M").strftime("%d %B %Y %H:%M")
+        except ValueError:
+            date_formatee = date_text
+        
+        # Extraction de la catégorie
+        categorie = soup.select_one("section > ul.navbar-head > li:nth-child(2) > a")
+        categorie = categorie.text.strip() if categorie else "Catégorie inconnue"
+        
+        # Vérifier si l'article existe déjà dans la base de données
+        if collection.find_one({"url": url}):
+            return None
+        
         return {
             "url": url,
             "titre": titre,
             "auteur": "Chouf TV MA",
+            "date": date_formatee,
+            "categorie": categorie,
             "contenu": contenu,
             "source": "Chouf TV"
         }
-
-    except Exception as e:
-        print(f"⚠ Erreur lors du scraping de {url}: {e}")
+    except Exception:
         return None
 
-
-# Récupérer les URLs des articles
-article_urls = get_article_urls(5000)
-print(f"✅ {len(article_urls)} articles trouvés. Début du scraping...")
-
-# Scraper chaque article
-articles = []
-for i, url in enumerate(article_urls, 1):
-    article = scrape_article(url)
-    if article:
-        articles.append(article)
-
-    # Insérer dans MongoDB par lots de 100
-    if len(articles) >= 100:
+def main():
+    """
+    Fonction principale qui exécute le scraping et stocke les articles dans MongoDB.
+    """
+    article_urls = get_article_urls(6000)
+    print(f"✅ {len(article_urls)} articles trouvés. Début du scraping...")
+    
+    articles = []
+    
+    # Utilisation d'un ThreadPoolExecutor pour accélérer le scraping
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        results = list(executor.map(scrape_article, article_urls))
+        articles = [article for article in results if article]
+    
+    # Enregistrement des articles dans MongoDB
+    if articles:
         collection.insert_many(articles)
         print(f"💾 {len(articles)} articles enregistrés dans MongoDB.")
-        articles = []  # Réinitialiser la liste
+    print("✅ 📂 Tous les articles sont enregistrés !")
 
-    # Pause aléatoire pour éviter de se faire bloquer
-    time.sleep(random.uniform(1, 3))
-
-# Insérer les derniers articles restants
-if articles:
-    collection.insert_many(articles)
-    print(f"💾 {len(articles)} derniers articles enregistrés dans MongoDB.")
-
-print("✅ 📂 Tous les articles sont enregistrés !")
+if __name__ == "__main__":
+    main()
