@@ -18,12 +18,9 @@ HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
 }
 
-# Liste des catégories d'articles à scraper
-<<<<<<< HEAD
-CATEGORIES = ["culture"]
-=======
+
 CATEGORIES = ["culture","Economy","national","world"]
->>>>>>> cb2b3da0d491cb7db20d66dc0cc93e9e30415205
+
 
 # Fonction pour récupérer les URLs des articles à partir des pages de catégories
 def get_article_urls():
