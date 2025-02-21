@@ -5,134 +5,149 @@ import random
 import sys
 import os
 
-# Ajouter le répertoire racine du projet au chemin d'accès pour les imports
+# Ajout du chemin pour importer les modules du projet
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
-from config.mongodb import get_mongo_collection  # Importer la configuration MongoDB
+# Import de la connexion MongoDB
+from config.mongo_atlass import get_mongo_atlass_collection  
+collection = get_mongo_atlass_collection("articles_ar")
 
-# Connexion à la collection MongoDB "articles_ar"
-collection = get_mongo_collection("articles_ar")
-
-# Définition des headers pour simuler un vrai navigateur et éviter les blocages
+# Headers pour éviter d'être bloqué
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
 }
 
-# Liste des catégories d'articles à scraper
-CATEGORIES = ["culture","Economy","national","world"]
+# Catégories à scraper
+CATEGORIES = ["politic", "economy", "national", "sport", "world", "health", "technology", "religion"]
 
-# Fonction pour récupérer les URLs des articles à partir des pages de catégories
 def get_article_urls():
+    """Scrape tous les articles disponibles dans chaque catégorie"""
     base_url = "https://www.akhbarona.com"
-    article_urls = set()
-    
+    article_urls = set()  # Utiliser un set pour éviter les doublons
+
     for category in CATEGORIES:
-        page = 1  # Initialisation du compteur de pages
-        
-        while True:  # Boucle infinie, s'arrêtera si une page est introuvable
+        page = 1
+        while True:
             url = f"{base_url}/{category}/index.{page}.html"
             print(f"🔍 Scraping {url}...")
 
-            response = requests.get(url, headers=HEADERS)
+            try:
+                response = requests.get(url, headers=HEADERS, timeout=10)
+                if response.status_code == 404:
+                    print(f"⚠ 404 - Fin des pages pour {category}, passage à la suivante.")
+                    break
+                if response.status_code != 200:
+                    print(f"⚠ Erreur {response.status_code}, nouvelle tentative dans 5 secondes...")
+                    time.sleep(5)
+                    continue
 
-            if response.status_code == 404:  # Si la page n'existe pas, arrêter le scraping de cette catégorie
-                print(f"⚠️ Page {page} pour {category.upper()} introuvable (404), arrêt.")
-                break
+                soup = BeautifulSoup(response.text, "html.parser")
+                articles = soup.find_all("a", href=True)
 
-            if response.status_code != 200:  # Si une autre erreur HTTP survient
-                print(f"❌ Erreur {response.status_code} sur {url}, on passe à la suivante.")
-                break
+                found = 0
+                for article in articles:
+                    href = article["href"]
+                    if "/articles/" in href or any(cat in href for cat in CATEGORIES):
+                        full_url = base_url + href if href.startswith("/") else href
+                        if full_url not in article_urls:
+                            article_urls.add(full_url)
+                            found += 1
 
-            soup = BeautifulSoup(response.text, "html.parser")
+                if found == 0:
+                    print(f"⚠ Aucun article trouvé sur {url}, fin de la catégorie.")
+                    break  # Passer à la prochaine catégorie si aucune URL trouvée
 
-            # Extraction des liens d'articles
-            articles = soup.find_all("a", href=True)
-            found = 0  # Compteur d'articles trouvés
+                page += 1
+                time.sleep(random.uniform(1, 3))
 
-            for article in articles:
-                href = article["href"]
-
-                # Vérification si l'URL correspond bien à un article
-                if "/articles/" in href or any(cat in href for cat in CATEGORIES):
-                    full_url = "https://www.akhbarona.com" + href if href.startswith("/") else href
-                    if full_url not in article_urls:
-                        article_urls.add(full_url)
-                        found += 1
-
-            print(f"📄 {category.upper()} - Page {page} scannée, {found} nouveaux articles trouvés. Total: {len(article_urls)} articles.")
-
-            if found == 0:  # Si aucune nouvelle URL trouvée, on suppose la fin des articles
-                print(f"🚫 Aucune nouvelle URL trouvée sur {category.upper()} page {page}, arrêt de la catégorie.")
-                break
-
-            page += 1  # Passer à la page suivante
-            time.sleep(random.uniform(1, 3))  # Pause aléatoire pour éviter le blocage du site
+            except Exception as e:
+                print(f"❌ Erreur lors du scraping de {url} : {e}")
+                time.sleep(5)
 
     return list(article_urls)
 
-# Fonction pour scraper le contenu d'un article
 def scrape_article(url):
+    """Récupère les informations détaillées d'un article"""
     try:
-        response = requests.get(url, headers=HEADERS)
-
+        response = requests.get(url, headers=HEADERS, timeout=10)
         if response.status_code == 404:
-            print(f"⚠ Article introuvable (404) : {url}")
+            print(f"⚠ Article non trouvé : {url}")
             return None
-
         if response.status_code != 200:
-            print(f"❌ Erreur {response.status_code} sur {url}")
+            print(f"⚠ Erreur {response.status_code} pour {url}")
             return None
 
         soup = BeautifulSoup(response.text, "html.parser")
 
-        # Extraction du titre de l'article
-        titre_tag = soup.find("h1", class_="artical-content-heads")
+        titre_tag = soup.find("h1", class_="text-end artical-content-heads lc-fs24")
         titre = titre_tag.text.strip() if titre_tag else "Titre inconnu"
 
-        # Extraction du contenu de l'article
         contenu_div = soup.find("div", class_="bodystr")
-        contenu = " ".join([p.text.strip() for p in contenu_div.find_all("p")]) if contenu_div else "Contenu non disponible"
+        contenu_paragraphs = [p.text.strip() for p in contenu_div.find_all("p")] if contenu_div else []
+        
+        if contenu_paragraphs and "أخبارنا المغربية" in contenu_paragraphs[0]:
+            contenu_paragraphs.pop(0)  # Supprimer l'auteur du début du contenu
+        
+        contenu = " ".join(contenu_paragraphs) if contenu_paragraphs else "Contenu non disponible"
 
-        # Vérification si l'article est déjà enregistré dans la base de données
+        categorie_tag = soup.find("span", class_="ms-2")
+        categorie = categorie_tag.text.strip() if categorie_tag else "Catégorie inconnue"
+
+        date_tag = soup.find("span", class_="story_date")
+        date_publication = date_tag.text.strip() if date_tag else "Date inconnue"
+
+        auteur_tag = soup.find("h4", class_="mb-3 lc-clr1")
+        auteur = auteur_tag.text.strip() if auteur_tag else "Auteur inconnu"
+
+        # Vérifier si l'article existe déjà dans MongoDB
         if collection.find_one({"url": url}):
-            print(f"⚠ Article déjà enregistré : {titre}")
+            print(f"⏭ Article déjà existant : {url}")
             return None
 
         return {
             "url": url,
             "titre": titre,
-            "auteur": "Akhbarona",
+            "categorie": categorie,
+            "date": date_publication,
+            "auteur": auteur,
             "contenu": contenu,
             "source": "Akhbarona",
         }
 
     except Exception as e:
-        print(f"⚠ Erreur lors du scraping de {url}: {e}")
+        print(f"❌ Erreur lors du scraping de l'article {url} : {e}")
         return None
 
-# Récupération des URLs des articles
-article_urls = get_article_urls()
-print(f"✅ {len(article_urls)} articles trouvés. Début du scraping...")
+def main():
+    """Exécute le scraping et stocke les données dans MongoDB"""
+    print("🚀 Début du scraping...")
+    article_urls = get_article_urls()
+    
+    if not article_urls:
+        print("⚠ Aucun article trouvé. Fin du programme.")
+        return
 
-# Scraper et stocker les articles dans MongoDB
-articles = []
-for i, url in enumerate(article_urls, 1):
-    article = scrape_article(url)
-    if article:
-        articles.append(article)
+    articles = []
+    for i, url in enumerate(article_urls, 1):
+        print(f"📄 ({i}/{len(article_urls)}) Scraping article : {url}")
+        article = scrape_article(url)
+        if article:
+            articles.append(article)
 
-    # Insérer les articles en lots de 100 pour optimiser l'accès à la base de données
-    if len(articles) >= 100:
+        # Enregistrer en base de données par lots de 50 articles
+        if len(articles) >= 50:
+            print(f"💾 Enregistrement de {len(articles)} articles dans MongoDB...")
+            collection.insert_many(articles)
+            articles = []
+
+        time.sleep(random.uniform(1, 3))
+
+    # Insérer les derniers articles restants
+    if articles:
+        print(f"💾 Enregistrement final de {len(articles)} articles dans MongoDB...")
         collection.insert_many(articles)
-        print(f"💾 {len(articles)} articles enregistrés dans MongoDB.")
-        articles = []  # Réinitialiser la liste temporaire
 
-    # Pause aléatoire entre les requêtes pour éviter d'être détecté comme bot
-    time.sleep(random.uniform(1, 3))
+    print("✅ Scraping terminé avec succès !")
 
-# Insérer les derniers articles restants dans MongoDB
-if articles:
-    collection.insert_many(articles)
-    print(f"💾 {len(articles)} derniers articles enregistrés dans MongoDB.")
-
-print("✅ 📂 Tous les articles sont enregistrés !")
+if __name__ == "__main__":
+    main()
