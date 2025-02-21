@@ -20,7 +20,7 @@ HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, comme Gecko) Chrome/91.0.4472.124 Safari/537.36"
 }
 
-def get_article_urls(max_articles=6000):
+def get_article_urls(max_articles=7000):
     """
     Récupère les URLs des articles en parcourant les pages d'index.
     
@@ -71,7 +71,7 @@ def scrape_article(url):
         titre = titre.text.strip() if titre else "Titre inconnu"
         
         # Extraction du contenu de l'article
-        contenu_div = soup.select_one("div.full-content")
+        contenu_div = soup.select_one("div.middleContent")
         contenu = " ".join(p.text.strip() for p in contenu_div.find_all("p")) if contenu_div else "Contenu non disponible"
         
         # Vérification si le contenu est vide ou indisponible
@@ -110,7 +110,7 @@ def main():
     """
     Fonction principale qui exécute le scraping et stocke les articles dans MongoDB.
     """
-    article_urls = get_article_urls(6000)
+    article_urls = get_article_urls(8000)
     print(f"✅ {len(article_urls)} articles trouvés. Début du scraping...")
     
     articles = []
