@@ -17,17 +17,9 @@ HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
 }
 
-<<<<<<< HEAD
 # Catégories à scraper
 CATEGORIES = ["politic", "economy", "national", "sport", "world", "health", "technology", "religion"]
 
-=======
-
-CATEGORIES = ["culture","Economy","national","world"]
-
-
-# Fonction pour récupérer les URLs des articles à partir des pages de catégories
->>>>>>> 89775817c46e88678fe8f96a58312d51fcc738f1
 def get_article_urls():
     """Scrape tous les articles disponibles dans chaque catégorie"""
     base_url = "https://www.akhbarona.com"
