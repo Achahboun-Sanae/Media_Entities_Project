@@ -55,7 +55,7 @@ def get_articles_from_page(category, subcategory, page):
     
     return articles
 
-def scrape_and_save_articles(categories, max_articles_per_category=100):
+def scrape_and_save_articles(categories, max_articles_per_category=5000):
     all_articles = []
 
     for category, subcategories in categories.items():
@@ -130,4 +130,4 @@ def scrape_and_save_articles(categories, max_articles_per_category=100):
     print(f"✅ Scraping terminé. {len(all_articles)} nouveaux articles enregistrés.")
 
 if __name__ == "__main__":
-    scrape_and_save_articles(CATEGORIES, max_articles_per_category=10)
+    scrape_and_save_articles(CATEGORIES, max_articles_per_category=5000)
