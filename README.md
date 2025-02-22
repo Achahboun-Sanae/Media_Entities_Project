@@ -42,7 +42,7 @@ article_data = {
     "titre": titre,
     "auteur": auteur,
     "contenu": contenu,
-    "source": "Le360_fr",
+    "source": source,  # où 'source' peut être "ChoufTv", "Hespress", ou "Akhbarona", ou "Le360" 
     "categorie": categorie,
     "date": date_publication
 }
