@@ -9,7 +9,7 @@ import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
 from config.mongo_atlass import get_mongo_atlass_collection  
-collection = get_mongo_atlass_collection("articles_i")
+collection = get_mongo_atlass_collection("articles_fr")
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
