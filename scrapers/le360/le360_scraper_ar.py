@@ -1,113 +1,132 @@
 import requests
 from bs4 import BeautifulSoup
 from pymongo import MongoClient
-from urllib.parse import urljoin
+import time
+import random  
 import sys
 import os
 
-# Ajouter le répertoire racine du projet au chemin d'accès pour les imports
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
-# Import de la fonction pour se connecter à MongoDB
-from config.mongodb import get_mongo_collection
+from config.mongo_atlass import get_mongo_atlass_collection  
+collection = get_mongo_atlass_collection("articles_ar")
 
-# Connexion à MongoDB
-collection = get_mongo_collection("articles_ar")
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+}
 
-# URL de base du site
-BASE_URL = "https://ar.le360.ma/"
+# Liste des catégories principales pour le scraping
+CATEGORIES = {
+    "politique": [],
+    "economie": [],
+    "societe": [],
+    "monde": [],
+    "culture": [],
+    "medias": [],
+    "people": [],
+    "nisaiat": []
+}
 
-# Fonction pour extraire les détails d'un article
-def extract_article_details(article_url):
+def get_articles_from_page(category, subcategory, page):
+    url = f"https://ar.le360.ma/{category}/" + (f"{subcategory}/?page={page}" if subcategory else f"?page={page}")
+    
     try:
-        response = requests.get(article_url, timeout=10)
-        if response.status_code == 200:
-            soup = BeautifulSoup(response.content, 'html.parser')
-
-            # Extraire le titre
-            title_tag = soup.find('h1')
-            title = title_tag.get_text(strip=True) if title_tag else "عنوان غير متوفر"
-
-            # Essayer plusieurs méthodes pour extraire le contenu
-            content = ""
-
-            # 1️⃣ Essayer avec <article>
-            article_body = soup.find('article')
-            if article_body:
-                paragraphs = article_body.find_all('p')
-                content = "\n".join([p.get_text(strip=True) for p in paragraphs if p.get_text(strip=True)])
-
-            # 2️⃣ Essayer avec <div class="article-content">
-            if not content:
-                alt_body = soup.find('div', class_="article-content")
-                if alt_body:
-                    paragraphs = alt_body.find_all('p')
-                    content = "\n".join([p.get_text(strip=True) for p in paragraphs if p.get_text(strip=True)])
-
-            # 3️⃣ Essayer avec d'autres balises si toujours vide
-            if not content:
-                all_paragraphs = soup.find_all('p')
-                content = "\n".join([p.get_text(strip=True) for p in all_paragraphs if p.get_text(strip=True)])
-
-            return {
-                "titre": title,
-                "contenu": content if content else "محتوى غير متوفر",
-                "url": article_url,
-                "source": "Le360",
-                "auteur": "Le360"
-            }
-        else:
-            print(f"❌ Erreur: Impossible d'accéder à {article_url} - Code {response.status_code}")
-            return None
+        response = requests.get(url, headers=HEADERS, timeout=10)
+        response.raise_for_status()  
     except requests.exceptions.RequestException as e:
-        print(f"🚨 Erreur lors de la récupération de l'article {article_url}: {e}")
-        return None
+        print(f"❌ Erreur de connexion : {e}")
+        return []
 
-# Fonction pour scraper les liens des articles
-def scrape_article_links():
-    article_links = set()
-    page_number = 1
+    soup = BeautifulSoup(response.text, 'html.parser')
+    articles = []
 
-    while len(article_links) < 500:  # Scraper 500 articles
-        page_url = f"{BASE_URL}?page={page_number}"
-        print(f"🔍 Scraping de la page : {page_url}")
+    for article in soup.find_all('div', class_='article-list--headline-container'):
+        title_tag = article.find('a')
+        if title_tag:
+            title = title_tag.text.strip()
+            link = title_tag['href']
+            if link.startswith("/"):
+                link = f"https://ar.le360.ma{link}"
+            # Vérifier si l'article est déjà dans la base avant de l'ajouter
+            if not collection.find_one({"url": link}):
+                articles.append({'title': title, 'link': link, 'category': category, 'subcategory': subcategory})
+    
+    return articles
+
+def scrape_and_save_articles(categories, max_articles_per_category=5000):
+    all_articles = []
+
+    for category, subcategories in categories.items():
+        print(f"🔍 Scraping catégorie : {category}...")
+
+        for subcategory in ([None] if not subcategories else subcategories):
+            print(f"➡️ Sous-catégorie : {subcategory if subcategory else 'Général'}")
+            page = 1
+            category_articles = []
+
+            while len(category_articles) < max_articles_per_category:
+                articles = get_articles_from_page(category, subcategory, page)
+                if not articles:
+                    print(f"⚠️ Fin des articles pour {category}/{subcategory} à la page {page}.")
+                    break
+
+                category_articles.extend(articles)
+                print(f"📄 {category.upper()} {f'- {subcategory.upper()}' if subcategory else ''} - Page {page}, {len(articles)} articles ajoutés. Total: {len(category_articles)} articles.")
+
+                if len(category_articles) >= max_articles_per_category:
+                    break
+
+                page += 1
+                time.sleep(random.uniform(1, 3))  
+
+            all_articles.extend(category_articles)
+
+    for article in all_articles:
+        url = article['link']
+        title = article['title']
+        category = article['category']
 
         try:
-            response = requests.get(page_url, timeout=10)
-            if response.status_code != 200:
-                print(f"❌ Erreur: Impossible d'accéder à {page_url} - Code {response.status_code}")
-                break
+            response = requests.get(url, headers=HEADERS, timeout=10)
+            response.raise_for_status()
+            soup = BeautifulSoup(response.text, 'html.parser')
 
-            soup = BeautifulSoup(response.content, 'html.parser')
+            titre_tag = soup.find("h1", class_="article-page-header")
+            titre = titre_tag.text.strip() if titre_tag else title
 
-            # Trouver les liens des articles
-            for link in soup.find_all('a', href=True):
-                href = link['href']
-                if href.startswith('/culture/') and len(article_links) < 500:
-                    full_url = urljoin(BASE_URL, href)
-                    article_links.add(full_url)
+            contenu_div = soup.find("article", class_="default__ArticleBody-sc-10mj2vp-2 cxGjrq article-body-wrapper")
+            contenu = " ".join([p.text.strip() for p in contenu_div.find_all("p")]) if contenu_div else "Contenu non disponible"
 
-            page_number += 1
+            # Extraction de la date de publication
+            date_tag = soup.find("div", class_="article-main-information-subheadline-date article-body-subheadline-date")
+            date_publication = date_tag.text.strip() if date_tag else "Date non disponible"
+
+            # Extraction de l'auteur
+            auteur_tag = soup.find("a", class_="article-main-information-credits-bold href")
+            auteur = auteur_tag.text.strip() if auteur_tag else "Le360"
+
+            category_tag = soup.find("a", class_="overline-link")
+            categorie = category_tag.text.strip() if category_tag else "Catégorie non disponible"
+
+            article_data = {
+                "url": url,
+                "titre": titre,
+                "auteur": auteur,
+                "contenu": contenu,
+                "source": "Le360",
+                "categorie": categorie,
+                "date": date_publication
+            }
+            collection.insert_one(article_data)
+            print(f"💾 Article enregistré : {titre} | ✍ Auteur : {auteur} | 📅 Date : {date_publication}")
 
         except requests.exceptions.RequestException as e:
-            print(f"🚨 Erreur lors de la récupération de la page {page_url}: {e}")
-            break
+            print(f"❌ Erreur HTTP sur {url}: {e}")
+        except Exception as e:
+            print(f"⚠ Erreur lors du scraping de {url}: {e}")
 
-    return list(article_links)
+    print(f"✅ Scraping terminé. {len(all_articles)} nouveaux articles enregistrés.")
 
-# Fonction principale
-def main():
-    article_links = scrape_article_links()
-    print(f"📌 Nombre total de liens d'articles trouvés : {len(article_links)}")
-
-    for link in article_links:
-        article_details = extract_article_details(link)
-        if article_details:
-            collection.insert_one(article_details)
-            print(f"✅ Article inséré : {article_details['titre']}")
-
-    print("🎯 Scraping terminé. Les articles ont été stockés dans MongoDB.")
-
-# Exécuter le script
 if __name__ == "__main__":
-    main()
+    scrape_and_save_articles(CATEGORIES, max_articles_per_category=5000)
+
