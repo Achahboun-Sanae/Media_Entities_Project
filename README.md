@@ -3,10 +3,11 @@ Ce projet vise à extraire et visualiser des entités médiatiques marocaines à
 
 🔹 **Cette première étape du projet** est consacrée à **la collecte et au stockage des articles**. Elle comprend les phases suivantes :
 
-**Collecte des URLs des articles**
-**Scraping du contenu des articles**
-**Stockage structuré dans MongoDB**
-**Élimination des doublons**
+- **Collecte des URLs des articles**.
+- **Scraping du contenu des articles**.
+- **Stockage structuré dans MongoDB**.
+- **Élimination des doublons**.
+  
 Les prochaines étapes incluront **le traitement NLP**, **la structuration des données** et **la visualisation des résultats**.
 
 ---
