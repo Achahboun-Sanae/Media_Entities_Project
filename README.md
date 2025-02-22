@@ -46,6 +46,7 @@ article_data = {
     "categorie": categorie,
     "date": date_publication
 }
+'''
 
 ### 📌 4. Gestion des doublons
    - Avant d'ajouter chaque article dans la base de données, une vérification est effectuée pour éviter les doublons, assurant ainsi une base de données propre et sans redondance.
