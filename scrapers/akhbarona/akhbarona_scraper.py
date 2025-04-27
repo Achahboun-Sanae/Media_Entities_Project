@@ -4,6 +4,8 @@ import time
 import random
 import sys
 import os
+from datetime import datetime
+import re
 
 # Ajout du chemin pour importer les modules du projet
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))

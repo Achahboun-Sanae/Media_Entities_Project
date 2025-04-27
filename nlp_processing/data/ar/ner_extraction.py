@@ -6,7 +6,6 @@ model = AutoModelForTokenClassification.from_pretrained(model_name)
 tokenizer = AutoTokenizer.from_pretrained(model_name)
 nlp_ner = pipeline("ner", model=model, tokenizer=tokenizer)
 
-# Fonction d'extraction des entités nommées avec BERT
 def extract_entities_bert(text):
     ner_results = nlp_ner(text)
     entities = [(result['word'], result['entity']) for result in ner_results]
