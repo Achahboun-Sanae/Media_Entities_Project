@@ -17,16 +17,6 @@ REQUEST_TIMEOUT = 30
 MAX_RETRIES = 3
 ARTICLES_PER_CATEGORY = 1670
 
-# Dictionnaire de correspondance des catégories (français -> arabe)
-CATEGORIES_TRANSLATION = {
-    'politique': 'سياسة',
-    'economie': 'اقتصاد',
-    'societe': 'مجتمع',
-    'culture': 'ثقافة',
-    'monde': 'دولي',
-    'sports': 'رياضة',
-    'medias': 'ميديا'
-}
 
 # Configuration du logging
 logging.basicConfig(
@@ -45,7 +35,41 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")
 from config.mongo_atlass import get_mongo_atlass_collection
 
 # Connexion MongoDB
-collection = get_mongo_atlass_collection("articles_ar")
+collection = get_mongo_atlass_collection("articles_fr")
+
+def parse_french_date(date_text):
+    """
+    Parse les dates en format français spécifique à le360.ma
+    Format attendu: "Le 20/04/2025 à 10h06"
+    """
+    try:
+        # Pattern pour le format français de le360.ma
+        pattern = r'Le (\d{2}/\d{2}/\d{4}) à (\d{2})h(\d{2})'
+        match = re.search(pattern, date_text)
+        
+        if match:
+            date_part = match.group(1)  # 20/04/2025
+            hour = match.group(2)      # 10
+            minute = match.group(3)    # 06
+            return datetime.strptime(f"{date_part} {hour}:{minute}", "%d/%m/%Y %H:%M")
+        
+        # Autres formats français possibles
+        patterns = [
+            (r'(\d{2}/\d{2}/\d{4})', "%d/%m/%Y"),  # 20/04/2025
+            (r'(\d{2}-\d{2}-\d{4})', "%d-%m-%Y"),   # 20-04-2025
+            (r'(\d{4}-\d{2}-\d{2})', "%Y-%m-%d"),   # 2025-04-20
+            (r'(\d{1,2}\s+[a-zA-Zéû]+\s+\d{4})', "%d %B %Y")  # 20 avril 2025
+        ]
+        
+        for pattern, date_format in patterns:
+            match = re.search(pattern, date_text)
+            if match:
+                return datetime.strptime(match.group(1), date_format)
+                
+    except (ValueError, AttributeError) as e:
+        logger.warning(f"Erreur de parsing de date française: {date_text} - {str(e)}")
+    
+    return None
 
 def extract_and_parse_date(soup):
     """
@@ -69,6 +93,13 @@ def extract_and_parse_date(soup):
         date_tag = soup.select_one(selector)
         if date_tag:
             date_text = date_tag.get_text(strip=True)
+            
+            # Essayer d'abord le format français
+            parsed_date = parse_french_date(date_text)
+            if parsed_date:
+                return parsed_date
+                
+            # Si format français non trouvé, essayer format arabe
             parsed_date = parse_arabic_date(date_text)
             if parsed_date:
                 return parsed_date
@@ -77,22 +108,26 @@ def extract_and_parse_date(soup):
 
 def parse_arabic_date(date_text):
     """
-    Parse les dates en format arabe
+    Parse les dates en format français spécifique à le360.ma
+    Format attendu: "Le 20/04/2025 à 10h06"
     """
     try:
-        # Pattern pour le format le360.ma
-        pattern = r'في (\d{2}/\d{2}/\d{4}) على الساعة (\d{2}:\d{2})'
+        # Pattern pour le format français de le360.ma
+        pattern = r'Le (\d{2}/\d{2}/\d{4}) à (\d{2})h(\d{2})'
         match = re.search(pattern, date_text)
         
         if match:
-            return datetime.strptime(f"{match.group(1)} {match.group(2)}", "%d/%m/%Y %H:%M")
+            date_part = match.group(1)  # 20/04/2025
+            hour = match.group(2)      # 10
+            minute = match.group(3)    # 06
+            return datetime.strptime(f"{date_part} {hour}:{minute}", "%d/%m/%Y %H:%M")
         
-        # Autres formats possibles
+        # Autres formats français possibles
         patterns = [
-            (r'(\d{2}/\d{2}/\d{4})', "%d/%m/%Y"),
-            (r'(\d{2}-\d{2}-\d{4})', "%d-%m-%Y"),
-            (r'(\d{4}-\d{2}-\d{2})', "%Y-%m-%d"),
-            (r'(\d{1,2}\s+\w+\s+\d{4})', "%d %m %Y")
+            (r'(\d{2}/\d{2}/\d{4})', "%d/%m/%Y"),  # 20/04/2025
+            (r'(\d{2}-\d{2}-\d{4})', "%d-%m-%Y"),   # 20-04-2025
+            (r'(\d{4}-\d{2}-\d{2})', "%Y-%m-%d"),   # 2025-04-20
+            (r'(\d{1,2}\s+[a-zA-Zéû]+\s+\d{4})', "%d %B %Y")  # 20 avril 2025
         ]
         
         for pattern, date_format in patterns:
@@ -101,7 +136,7 @@ def parse_arabic_date(date_text):
                 return datetime.strptime(match.group(1), date_format)
                 
     except (ValueError, AttributeError) as e:
-        logger.warning(f"Erreur de parsing de date: {date_text} - {str(e)}")
+        logger.warning(f"Erreur de parsing de date française: {date_text} - {str(e)}")
     
     return None
 
@@ -124,7 +159,7 @@ def extract_title(soup):
     except Exception as e:
         logger.warning(f"Erreur d'extraction du titre: {str(e)}")
     
-    return "بدون عنوان"
+    return "aucun titre"
 
 def extract_content(soup):
     """Extrait le contenu principal de l'article"""
@@ -158,7 +193,7 @@ def extract_content(soup):
     except Exception as e:
         logger.warning(f"Erreur d'extraction du contenu: {str(e)}")
     
-    return "المحتوى غير متوفر"
+    return "Contenu Non disponible"
 
 def extract_author(soup):
     """Extraction optimisée de l'auteur"""
@@ -182,7 +217,7 @@ def extract_author(soup):
 
 def get_sitemap_urls(category):
     """Récupère les URLs des sitemaps pour une catégorie"""
-    sitemap_index_url = f"https://ar.le360.ma/arc/outboundfeeds/sitemap-index/category/{category}/"
+    sitemap_index_url = f"https://fr.le360.ma/arc/outboundfeeds/sitemap-index/category/{category}/"
     
     try:
         response = requests.get(sitemap_index_url, timeout=REQUEST_TIMEOUT)
@@ -223,8 +258,7 @@ def scrape_article(url, category_fr, retry=0):
         response.raise_for_status()
         soup = BeautifulSoup(response.text, 'html.parser')
         
-        # Conversion de la catégorie française en arabe
-        category_ar = CATEGORIES_TRANSLATION.get(category_fr, category_fr)
+       
         
         return {
             'titre': extract_title(soup),
@@ -232,7 +266,7 @@ def scrape_article(url, category_fr, retry=0):
             'auteur': extract_author(soup),
             'date': extract_and_parse_date(soup),
             'url': url,
-            'categorie': category_ar,  # Stockage en arabe dans la base
+            'categorie': category_fr,  
             'source': 'le360_ar',
             'date_import': datetime.now(),
         }
@@ -291,9 +325,9 @@ def main():
         #'economie', 
         #'societe', 
         #'culture', 
-        'monde',
+        #'monde',
         'sports',
-        'medias'
+        #'medias'
         ]
     
     total = 0

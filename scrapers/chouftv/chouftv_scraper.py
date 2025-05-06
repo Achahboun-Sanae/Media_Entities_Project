@@ -13,17 +13,32 @@ from urllib.parse import urljoin, unquote
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 from config.mongo_atlass import get_mongo_atlass_collection
 
+<<<<<<< HEAD
 
 collection = get_mongo_atlass_collection("articles_chouftv_new2")
 
+=======
+collection = get_mongo_atlass_collection("articles_chouftv_sport")
+
+>>>>>>> 279f7cd5a57f4a08a6efea424b503f95e2d0cd35
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
 }
 
 CATEGORIES = {
+<<<<<<< HEAD
     "press": [
         "https://chouftv.ma/press/presscategory/international"
     ],
+=======
+    '''
+    "press": [
+        "https://chouftv.ma/press/presscategory/politique",
+        "https://chouftv.ma/press/presscategory/societe",
+        "https://chouftv.ma/press/presscategory/international"
+    ],
+    '''
+>>>>>>> 279f7cd5a57f4a08a6efea424b503f95e2d0cd35
     "sport": [
         "https://chouftv.ma/sport/sportcategory/دوريات",
         "https://chouftv.ma/sport/sportcategory/رياضات-أخرى",
@@ -108,7 +123,11 @@ def parse_arabic_date(date_str):
         print(f"Erreur de conversion de la date '{date_str}': {str(e)}")
         return None
 
+<<<<<<< HEAD
 def get_article_urls(max_articles_per_category=7000):
+=======
+def get_article_urls(max_articles_per_category=1700):
+>>>>>>> 279f7cd5a57f4a08a6efea424b503f95e2d0cd35
     """Récupère les URLs des articles"""
     article_urls = set()
     
@@ -224,7 +243,11 @@ def scrape_article(url):
             "date": published_date,
             "categorie": category,
             "contenu": content,
+<<<<<<< HEAD
             "source": "Chouf TV",
+=======
+            "source": "شوف تي في",
+>>>>>>> 279f7cd5a57f4a08a6efea424b503f95e2d0cd35
             "date_import": datetime.now()
         }
         

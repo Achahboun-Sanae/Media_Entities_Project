@@ -4,7 +4,11 @@ import time
 import random
 import sys
 import os
+<<<<<<< HEAD
 from datetime import datetime, timedelta
+=======
+from datetime import datetime
+>>>>>>> 279f7cd5a57f4a08a6efea424b503f95e2d0cd35
 import re
 
 # Configuration des chemins
