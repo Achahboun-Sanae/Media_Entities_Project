@@ -257,9 +257,6 @@ def scrape_article(url, category_fr, retry=0):
         response = requests.get(url, timeout=REQUEST_TIMEOUT)
         response.raise_for_status()
         soup = BeautifulSoup(response.text, 'html.parser')
-        
-       
-        
         return {
             'titre': extract_title(soup),
             'contenu': extract_content(soup),
