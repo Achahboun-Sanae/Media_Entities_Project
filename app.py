@@ -200,8 +200,8 @@ st.markdown("<div style='margin-top: 50px;'></div>", unsafe_allow_html=True)
 
 page = option_menu(
     menu_title=None,
-    options=["Tableau de bord", "Entités", "Graphe", "Statistiques", "Articles", "Export"],
-    icons=["bar-chart", "search", "diagram-3", "graph-up", "newspaper", "download"],
+    options=["Tableau de bord", "Entités", "Graphe", "Statistiques", "Articles", "Carte", "Export"],
+    icons=["bar-chart", "search", "diagram-3", "graph-up", "newspaper", "map", "download"],
     default_index=0,
     orientation="horizontal",
     styles={
@@ -1173,6 +1173,222 @@ elif page == "Statistiques":
 
     else:
         st.warning("Aucune donnée disponible pour les statistiques.")
+elif page == "Carte":
+    st.title("🗺️ Visualisation cartographique des entités")
+    
+    if not entities_data.empty and 'Nom' in entities_data.columns:
+        from streamlit_folium import folium_static
+        import folium
+        from geopy.geocoders import Nominatim
+        from geopy.extra.rate_limiter import RateLimiter
+        from folium.plugins import MarkerCluster, HeatMap
+        import time
+
+        # Configuration initiale
+        st.markdown("""
+        <style>
+            .map-container {
+                border-radius: 10px;
+                border: 1px solid #e0e0e0;
+                overflow: hidden;
+                margin-bottom: 20px;
+            }
+        </style>
+        """, unsafe_allow_html=True)
+
+        # Dictionnaire de cache pour les localisations déjà trouvées
+        if 'location_cache' not in st.session_state:
+            st.session_state.location_cache = {
+                # Exemple de cache initial
+                "Paris": (48.8566, 2.3522),
+                "New York": (40.7128, -74.0060),
+                "Londres": (51.5074, -0.1278)
+            }
+
+        # Configuration de la carte
+        with st.expander("⚙️ Paramètres", expanded=True):
+            col1, col2 = st.columns(2)
+            with col1:
+                map_type = st.selectbox("Type de carte", 
+                                      ["OpenStreetMap", "Stamen Terrain", "CartoDB positron"])
+                zoom = st.slider("Niveau de zoom", 1, 15, 5)
+            with col2:
+                cluster = st.checkbox("Regrouper les marqueurs", True)
+                heatmap = st.checkbox("Afficher heatmap", False)
+                show_missing = st.checkbox("Afficher les entités non trouvées", False)
+
+        # Filtrer les entités géographiques
+        geo_types = ['ville', 'city', 'pays', 'country', 'lieu', 'location', 'loc', 'place', 'region']
+        geo_entities = entities_data[
+            entities_data['Type'].str.lower().isin(geo_types)
+        ].copy()
+
+        if geo_entities.empty:
+            st.warning("Aucune entité géographique trouvée dans les données.")
+            st.stop()
+
+        # Initialisation du géocodeur
+        geolocator = Nominatim(user_agent="geo_dashboard", timeout=10)
+        geocode = RateLimiter(geolocator.geocode, min_delay_seconds=1)
+
+        # Fonction de géocodage avec cache
+        def get_location(entity_name):
+            # Vérifier d'abord dans le cache
+            if entity_name in st.session_state.location_cache:
+                return st.session_state.location_cache[entity_name]
+            
+            try:
+                location = geocode(entity_name)
+                if location:
+                    coord = (location.latitude, location.longitude)
+                    st.session_state.location_cache[entity_name] = coord
+                    return coord
+            except Exception as e:
+                st.warning(f"Erreur de géocodage pour {entity_name}: {str(e)}")
+            return None
+
+        # Géocodage des entités
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        
+        valid_entities = []
+        missing_entities = []
+        
+        for i, row in geo_entities.iterrows():
+            entity_name = str(row['Nom']).strip()
+            coord = get_location(entity_name)
+            
+            if coord:
+                valid_entities.append({
+                    'name': entity_name,
+                    'type': row['Type'],
+                    'count': row.get('Occurrences', 1),
+                    'lat': coord[0],
+                    'lon': coord[1]
+                })
+            else:
+                missing_entities.append(entity_name)
+            
+            # Mise à jour de la progression
+            progress = (i + 1) / len(geo_entities)
+            progress_bar.progress(min(progress, 1.0))
+            status_text.text(f"Traitement {i+1}/{len(geo_entities)} - Trouvées: {len(valid_entities)}")
+
+        progress_bar.empty()
+        status_text.empty()
+
+        if not valid_entities:
+            st.error("Aucune localisation n'a pu être déterminée")
+            st.stop()
+
+        # Création de la carte
+        m = folium.Map(
+            location=[valid_entities[0]['lat'], valid_entities[0]['lon']],
+            zoom_start=zoom,
+            tiles=map_type,
+            control_scale=True
+        )
+
+        # Cluster de marqueurs si activé
+        if cluster:
+            marker_cluster = MarkerCluster().add_to(m)
+
+        # Ajout des marqueurs
+        for loc in valid_entities:
+            popup_content = f"""
+            <div style="width: 250px;">
+                <h4 style="margin-bottom: 5px;">{loc['name']}</h4>
+                <hr style="margin: 5px 0;">
+                <p><b>Type:</b> {loc['type']}</p>
+                <p><b>Mentions:</b> {loc['count']}</p>
+            </div>
+            """
+            
+            icon = folium.Icon(
+                icon='map-marker',
+                color='blue' if loc['count'] > 5 else 'green',
+                prefix='fa'
+            )
+            
+            marker = folium.Marker(
+                [loc['lat'], loc['lon']],
+                popup=folium.Popup(popup_content, max_width=300),
+                tooltip=f"{loc['name']} ({loc['count']})",
+                icon=icon
+            )
+            
+            if cluster:
+                marker.add_to(marker_cluster)
+            else:
+                marker.add_to(m)
+
+        # Heatmap si activée
+        if heatmap:
+            heat_data = [[loc['lat'], loc['lon'], loc['count']] for loc in valid_entities]
+            HeatMap(heat_data, radius=15).add_to(m)
+
+        # Contrôles utiles
+        folium.plugins.Fullscreen().add_to(m)
+        folium.plugins.MousePosition().add_to(m)
+
+        # Affichage de la carte
+        with st.container():
+            st.markdown("<div class='map-container'>", unsafe_allow_html=True)
+            folium_static(m, width=1000, height=600)
+            st.markdown("</div>", unsafe_allow_html=True)
+
+        # Statistiques
+        st.subheader("📊 Statistiques")
+        cols = st.columns(3)
+        cols[0].metric("Localisations trouvées", len(valid_entities))
+        cols[1].metric("Entités non trouvées", len(missing_entities))
+        cols[2].metric("Taux de succès", f"{len(valid_entities)/len(geo_entities)*100:.1f}%")
+
+        # Affichage des entités non trouvées
+        if show_missing and missing_entities:
+            with st.expander("🔍 Entités non localisées"):
+                st.write("Ces entités n'ont pas pu être géolocalisées :")
+                st.write(missing_entities)
+                
+                # Bouton pour ajouter manuellement au cache
+                selected_missing = st.selectbox("Sélectionner une entité à ajouter manuellement", 
+                                              missing_entities)
+                col_lat, col_lon = st.columns(2)
+                with col_lat:
+                    manual_lat = st.number_input("Latitude", value=0.0)
+                with col_lon:
+                    manual_lon = st.number_input("Longitude", value=0.0)
+                
+                if st.button("Ajouter au cache"):
+                    st.session_state.location_cache[selected_missing] = (manual_lat, manual_lon)
+                    st.success(f"{selected_missing} ajouté au cache avec les coordonnées ({manual_lat}, {manual_lon})")
+
+        # Export des données
+        if st.button("💾 Exporter les localisations trouvées"):
+            df = pd.DataFrame(valid_entities)
+            csv = df.to_csv(index=False).encode('utf-8')
+            st.download_button(
+                label="Télécharger CSV",
+                data=csv,
+                file_name="localisations_trouvees.csv",
+                mime="text/csv"
+            )
+            
+        if st.button("💾 Exporter le cache des localisations"):
+            cache_df = pd.DataFrame.from_dict(st.session_state.location_cache, 
+                                            orient='index',
+                                            columns=['Latitude', 'Longitude'])
+            cache_df.reset_index(inplace=True)
+            cache_df.rename(columns={'index': 'Nom'}, inplace=True)
+            csv = cache_df.to_csv(index=False).encode('utf-8')
+            st.download_button(
+                label="Télécharger Cache",
+                data=csv,
+                file_name="cache_localisations.csv",
+                mime="text/csv"
+            )
+    else:
+        st.warning("Aucune donnée géographique disponible")
 
 elif page == "Export":
     st.title("📤 Export des données")
