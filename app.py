@@ -25,6 +25,11 @@ import tempfile
 import plotly.graph_objects as go
 from st_aggrid import  GridUpdateMode , AgGrid as ag_grid 
 import seaborn as sns
+from streamlit_folium import folium_static
+import folium
+from geopy.geocoders import Nominatim
+from geopy.extra.rate_limiter import RateLimiter
+from folium.plugins import MarkerCluster, HeatMap
 
 # Configuration du chemin
 sys.path.append(str(Path(__file__).parent.parent))
@@ -45,7 +50,7 @@ manager = init_supabase()
 # ======== Interface ========
 # Appliquer le thème initial par défaut
 if "theme_selector" not in st.session_state:
-    st.session_state.theme_selector = "Sombre"
+    st.session_state.theme_selector = "Clair"
 
 def set_theme(theme):
     if theme == "Sombre":
@@ -198,6 +203,7 @@ st.title("Dashboard Entités Relationnelles")
 # Ajoute un petit espace entre le titre et le menu
 st.markdown("<div style='margin-top: 50px;'></div>", unsafe_allow_html=True)
 
+# Barre de navigation avec styles ajustés
 page = option_menu(
     menu_title=None,
     options=["Tableau de bord", "Entités", "Graphe", "Statistiques", "Articles", "Carte", "Export"],
@@ -205,11 +211,24 @@ page = option_menu(
     default_index=0,
     orientation="horizontal",
     styles={
-        "container": {"padding": "0!important"},
-        "nav-link": {"font-size": "14px", "margin": "0px", "--hover-color": "#eee"},
-        "nav-link-selected": {"background-color": "#ff6600"},
+        "container": {
+            "padding": "0!important",
+            "margin": "0!important",
+            "background-color": "#f8f9fa",
+        },
+        "nav-link": {
+            "font-size": "13px",
+            "margin": "0px",
+            "--hover-color": "#eee",
+            "padding": "8px 12px",
+        },
+        "nav-link-selected": {
+            "background-color": "#ff6600",
+            "font-weight": "normal",
+        },
     }
-)
+)  
+
 # ======== Pages ========
 if page == "Tableau de bord":
     # Style CSS personnalisé avec support complet des thèmes
@@ -656,50 +675,31 @@ elif page == "Articles":
             
             stats_df = pd.merge(article_stats, source_stats, on='Source')
             stats_df['Relations/article'] = stats_df['Nombre de relations'] / stats_df["Nombre d'articles"]
+            stats_df = stats_df.sort_values("Nombre d'articles", ascending=False).dropna()
 
-        # Onglets : Tableau + Visualisations
-        tab1, tab2 = st.tabs(["📋 Données tabulaires", "📈 Visualisations"])
+        # Calcul dynamique de la hauteur en fonction du nombre de lignes
+        num_rows = len(stats_df)
+        row_height = 35  # Hauteur par ligne en pixels
+        header_height = 70  # Hauteur de l'en-tête
+        min_height = 200  # Hauteur minimale
+        table_height = min(max(num_rows * row_height + header_height, min_height), 600)  # Limité à 600px max
 
-        with tab1:
-            st.dataframe(
-                stats_df.sort_values("Nombre d'articles", ascending=False),
-                column_config={
-                    "Source": st.column_config.TextColumn("Source médiatique"),
-                    "Nombre d'articles": st.column_config.NumberColumn("Articles"),
-                    "Nombre de relations": st.column_config.NumberColumn("Relations"),
-                    "Relations/article": st.column_config.NumberColumn(
-                        "Relations/article",
-                        format="%.1f",
-                        help="Ratio moyen de relations par article"
-                    )
-                },
-                height=400,
-                use_container_width=True
-            )
-            st.download_button("📥 Télécharger les données", stats_df.to_csv(index=False), "statistiques_sources.csv")
-
-        with tab2:
-            col1, col2 = st.columns(2)
-
-            with col1:
-                fig = px.bar(
-                    stats_df.nlargest(10, "Nombre d'articles"),
-                    x='Source', y="Nombre d'articles",
-                    title="Top 10 des sources par nombre d'articles", color='Source'
+        st.dataframe(
+            stats_df,
+            column_config={
+                "Source": st.column_config.TextColumn("Source médiatique"),
+                "Nombre d'articles": st.column_config.NumberColumn("Articles"),
+                "Nombre de relations": st.column_config.NumberColumn("Relations"),
+                "Relations/article": st.column_config.NumberColumn(
+                    "Relations/article",
+                    format="%.1f",
+                    help="Ratio moyen de relations par article"
                 )
-                st.plotly_chart(fig, use_container_width=True)
-
-            with col2:
-                fig = px.scatter(
-                    stats_df,
-                    x="Nombre d'articles", y='Nombre de relations',
-                    size='Nombre de relations',
-                    color='Source',
-                    title="Corrélation Articles vs Relations",
-                    hover_name='Source',
-                    log_x=True, log_y=True
-                )
-                st.plotly_chart(fig, use_container_width=True)
+            },
+            height=table_height,  # Hauteur dynamique
+            use_container_width=True
+        )
+        st.download_button("📥 Télécharger les données", stats_df.to_csv(index=False), "statistiques_sources.csv")
 
         # ========== 2. ANALYSE DÉTAILLÉE PAR SOURCE ==========
         st.header("🔍 Analyse détaillée d'une source")
@@ -723,9 +723,9 @@ elif page == "Articles":
 
             # Entités mentionnées
             st.subheader("🏷 Entités les plus citées")
-            sources = source_data['nom_source'].value_counts()
-            targets = source_data['nom_cible'].value_counts()
-            top_entities = (sources + targets).fillna(0).astype(int).sort_values(ascending=False).head(20)
+            sources = source_data['nom_source'].value_counts().fillna(0)
+            targets = source_data['nom_cible'].value_counts().fillna(0)
+            top_entities = (sources + targets).sort_values(ascending=False).head(20)
 
             entities_df = top_entities.reset_index()
             entities_df.columns = ['Entité', 'Nombre']
@@ -757,9 +757,13 @@ elif page == "Articles":
             # Détails des articles
             st.subheader("📝 Détails des articles")
             if 'article_id' in source_data.columns:
-                articles_to_show = source_data.drop_duplicates('article_id')
+                articles_to_show = source_data.drop_duplicates('article_id').dropna()
             else:
-                articles_to_show = source_data
+                articles_to_show = source_data.dropna()
+
+            # Hauteur dynamique pour le tableau des articles
+            article_rows = len(articles_to_show)
+            article_table_height = min(max(article_rows * row_height + header_height, min_height), 600)
 
             st.dataframe(
                 articles_to_show,
@@ -768,6 +772,7 @@ elif page == "Articles":
                     "title": "Titre",
                     "url": st.column_config.LinkColumn("URL")
                 },
+                height=article_table_height,
                 hide_index=True,
                 use_container_width=True
             )
@@ -776,19 +781,12 @@ elif page == "Articles":
     else:
         st.warning("Aucune donnée sur les sources n'est disponible.")
 
-
 elif page == "Graphe":
     st.title("🌍 Réseau Relationnel Intelligent")
     
     if not entities_data.empty and entity_relations:
         # ========== CONFIGURATION ==========
-        # Constantes pour les styles
-        TYPE_ICONS = {
-            'PER': '👤', 'LOC': '🌍', 
-            'ORG': '🏢', 'EVENT': '🎪',
-            'MISC': '🔮'
-        }
-
+        # Couleurs pour les types d'entités
         NODE_COLORS = {
             'PER': '#FF6B6B', 'LOC': '#4ECDC4', 
             'ORG': '#45B7D1', 'EVENT': '#A593E0',
@@ -801,7 +799,6 @@ elif page == "Graphe":
             'membership': '#FFAA85'
         }
 
-        
         # ========== SIDEBAR ==========
         with st.sidebar:
             st.header("⚙️ Paramètres Avancés")
@@ -810,8 +807,7 @@ elif page == "Graphe":
             selected_types = st.multiselect(
                 "Types d'entités",
                 options=sorted(entities_data['Type'].unique()),
-                default=list(entities_data['Type'].unique()),
-                format_func=lambda x: f"{TYPE_ICONS.get(x, '🔘')} {x}"
+                default=list(entities_data['Type'].unique())
             )
             
             # Sélection des entités avec recherche
@@ -869,11 +865,11 @@ elif page == "Graphe":
             G.add_node(
                 entity,
                 label=entity if show_labels else "",
-                title=f"{entity} ({entity_type}) - {occurrences} connexions",  # Tooltip simplifié
+                title=f"{entity} ({entity_type}) - {occurrences} connexions",
                 group=entity_type,
                 size=node_size + occurrences**0.5,
-                color=NODE_COLORS.get(entity_type, '#999999'),  # Couleur par type
-                shape='dot',  # Tous les nœuds en cercle
+                color=NODE_COLORS.get(entity_type, '#999999'),
+                shape='dot',
                 borderWidth=2,
                 font={
                     'size': font_size,
@@ -891,15 +887,13 @@ elif page == "Graphe":
         for (source, target, rel_type), count in relation_counts.items():
             G.add_edge(
                 source, target,
-                # Remplacer le HTML par du texte simple
-                title=f"{rel_type}\n────────────\nConnections: {count}",  # Format texte simple
+                title=f"{rel_type}\n────────────\nConnections: {count}",
                 label=rel_type if show_labels else "",
                 width=edge_width * min(3, count**0.5),
                 color=EDGE_COLORS.get(rel_type.split('_')[0], '#cccccc'),
                 smooth={'type': 'continuous'},
-                # Ajouter ces options pour un meilleur rendu
                 font={
-                    'size': font_size - 2,  # Taille légèrement plus petite que les nœuds
+                    'size': font_size - 2,
                     'face': 'Arial',
                     'align': 'middle'
                 }
@@ -976,7 +970,6 @@ elif page == "Graphe":
         
         # Génération et affichage du graphe
         try:
-            # Solution robuste pour l'encodage (spécialement pour l'arabe)
             html = net.generate_html()
             with tempfile.NamedTemporaryFile(mode="w", suffix=".html", encoding="utf-8", delete=False) as f:
                 f.write(html)
@@ -1028,163 +1021,220 @@ elif page == "Graphe":
         st.image("https://via.placeholder.com/800x400?text=No+Data+Available", use_column_width=True)
 
 elif page == "Statistiques":
-    st.title("📈 Statistiques avancées")
+    st.title("📈 Tableau de bord analytique")
     
     if not entities_data.empty or entity_relations:
-        tab1, tab2, tab3 = st.tabs(["📌 Entités", "🔗 Relations", "🗝️ Mots-clés"])
+        # Configuration des onglets avec icônes modernes
+        tab1, tab2 = st.tabs(["🔠 Entités", "🔄 Relations"])
 
         # ================================
-        # TAB 1 — ENTITÉS
+        # TAB 1 — ENTITÉS (Optimisé)
         # ================================
         with tab1:
-            st.subheader("Analyse interactive des entités")
+            st.subheader("Analyse des entités", divider="rainbow")
             
             if not entities_data.empty:
-                entity_types = entities_data['Type'].unique().tolist()
-                selected_types = st.multiselect("Filtrer par type d'entité :", entity_types, default=entity_types)
+                # Filtres en colonne pour meilleure organisation
+                with st.expander("🔧 Filtres avancés", expanded=True):
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        entity_types = entities_data['Type'].unique().tolist()
+                        selected_types = st.multiselect(
+                            "Types d'entités à inclure :",
+                            options=entity_types,
+                            default=entity_types,
+                            help="Sélectionnez un ou plusieurs types d'entités à analyser"
+                        )
+                    
+                    with col2:
+                        min_occurrences = st.slider(
+                            "Seuil minimum d'occurrences :",
+                            min_value=1,
+                            max_value=int(entities_data['Occurrences'].max()),
+                            value=1,
+                            help="Filtrer les entités avec au moins ce nombre d'occurrences"
+                        )
 
-                filtered_entities = entities_data[entities_data['Type'].isin(selected_types)]
+                # Appliquer les filtres
+                filtered_entities = entities_data[
+                    (entities_data['Type'].isin(selected_types)) & 
+                    (entities_data['Occurrences'] >= min_occurrences)
+                ].copy()
 
-                col1, col2 = st.columns(2)
-
+                # Visualisations en grille responsive
+                st.markdown("### 📊 Distribution des entités")
+                
+                col1, col2 = st.columns([3, 2])
                 with col1:
-                    top_entities = filtered_entities.sort_values('Occurrences', ascending=False).head(15)
+                    # Top entités avec barres horizontales
+                    top_n = st.slider("Nombre d'entités à afficher :", 5, 30, 15)
+                    top_entities = filtered_entities.nlargest(top_n, 'Occurrences')
+                    
                     fig = px.bar(
                         top_entities, 
                         x='Occurrences', 
                         y='Nom', 
-                        color='Type', 
+                        color='Type',
                         orientation='h',
-                        title="🎯 Top 15 des entités les plus mentionnées",
-                        labels={'Occurrences': 'Nombre d’occurrences', 'Nom': 'Entité'}
+                        title=f"Top {top_n} des entités",
+                        template='plotly_white'
                     )
-                    fig.update_layout(yaxis={'categoryorder': 'total ascending'})
+                    fig.update_layout(
+                        height=500,
+                        yaxis={'categoryorder': 'total ascending'},
+                        hovermode='y unified'
+                    )
                     st.plotly_chart(fig, use_container_width=True)
 
                 with col2:
+                    # Camembert des types avec légende interactive
                     type_counts = filtered_entities['Type'].value_counts().reset_index()
-                    type_counts.columns = ['Type', 'Nombre']
-                    fig = px.pie(type_counts, names='Type', values='Nombre', hole=0.4,
-                                 title="📂 Répartition des types d’entités")
+                    fig = px.pie(
+                        type_counts, 
+                        names='Type', 
+                        values='count',
+                        hole=0.35,
+                        title="Répartition par type"
+                    )
+                    fig.update_traces(
+                        textposition='inside',
+                        textinfo='percent+label',
+                        hovertemplate="<b>%{label}</b><br>%{value} entités (%{percent})"
+                    )
                     st.plotly_chart(fig, use_container_width=True)
 
-                st.markdown("#### 📊 Distribution des occurrences (log-scale possible)")
-                log_scale = st.checkbox("Utiliser l’échelle logarithmique", value=False)
+                # Histogramme avec options interactives
+                st.markdown("### 📈 Distribution des fréquences")
+                with st.expander("Options d'affichage"):
+                    show_log = st.toggle("Échelle logarithmique", False)
+                    bin_size = st.slider("Taille des intervalles :", 1, 20, 5)
+
                 fig = px.histogram(
                     filtered_entities,
                     x='Occurrences',
-                    nbins=40,
-                    title="Distribution des occurrences d’entités",
-                    log_y=log_scale
+                    nbins=bin_size,
+                    log_y=show_log,
+                    color='Type',
+                    marginal='box',
+                    title="Histogramme des occurrences"
                 )
                 st.plotly_chart(fig, use_container_width=True)
 
         # ================================
-        # TAB 2 — RELATIONS
+        # TAB 2 — RELATIONS (Optimisé)
         # ================================
         with tab2:
-            st.subheader("Exploration des relations")
-
+            st.subheader("Analyse des relations", divider="rainbow")
+            
             if entity_relations:
                 relations_df = pd.DataFrame(entity_relations, columns=["Source", "Target", "Type"])
-                top_relation_types = relations_df['Type'].value_counts().head(10).reset_index()
-                top_relation_types.columns = ['Type', 'Nombre']
+                
+                # Section de filtrage
+                with st.expander("🔎 Options d'analyse", expanded=True):
+                    relation_types = sorted(relations_df['Type'].unique())
+                    selected_rel_types = st.multiselect(
+                        "Types de relations à inclure :",
+                        options=relation_types,
+                        default=relation_types[:3] if len(relation_types) > 3 else relation_types
+                    )
+                    filtered_relations = relations_df[relations_df['Type'].isin(selected_rel_types)]
 
+                # Visualisations en grille
                 col1, col2 = st.columns(2)
-
+                
                 with col1:
+                    # Graphique des relations les plus fréquentes
+                    rel_counts = filtered_relations['Type'].value_counts().reset_index()
                     fig = px.bar(
-                        top_relation_types,
-                        x='Nombre',
+                        rel_counts,
+                        x='count',
                         y='Type',
                         orientation='h',
-                        title="🔗 Top 10 des types de relations",
-                        color='Nombre',
-                        color_continuous_scale='Viridis'
+                        title="Relations les plus fréquentes",
+                        color='count',
+                        color_continuous_scale='deep'
                     )
-                    fig.update_layout(yaxis={'categoryorder': 'total ascending'})
+                    fig.update_layout(
+                        yaxis={'categoryorder': 'total ascending'},
+                        height=400
+                    )
                     st.plotly_chart(fig, use_container_width=True)
 
                 with col2:
+                    # Sunburst des relations par type d'entité
                     try:
-                        rel_with_types = relations_df.merge(
+                        rel_with_types = filtered_relations.merge(
                             entities_data[['Nom', 'Type']].rename(columns={'Nom': 'Source', 'Type': 'SourceType'}),
-                            on='Source'
+                            on='Source', how='left'
                         ).merge(
                             entities_data[['Nom', 'Type']].rename(columns={'Nom': 'Target', 'Type': 'TargetType'}),
-                            on='Target'
+                            on='Target', how='left'
                         )
                         type_pairs = rel_with_types.groupby(['SourceType', 'TargetType']).size().reset_index(name='count')
+                        
                         fig = px.sunburst(
                             type_pairs,
                             path=['SourceType', 'TargetType'],
                             values='count',
-                            title="🌐 Répartition des relations par type d'entités"
+                            title="Relations par types d'entités",
+                            color='count',
+                            color_continuous_scale='blues'
                         )
                         st.plotly_chart(fig, use_container_width=True)
                     except Exception as e:
-                        st.error("Erreur lors de la jointure avec les types d'entités.")
+                        st.warning("Données insuffisantes pour cette visualisation")
 
+                # Analyse temporelle si disponible
                 if not relations_full.empty and 'date' in relations_full.columns:
-                    st.markdown("#### ⏳ Évolution temporelle des types de relations")
+                    st.markdown("### ⏳ Analyse temporelle")
+                    
                     try:
                         rel_temp = relations_full.copy()
                         rel_temp['date'] = pd.to_datetime(rel_temp['date'])
-                        rel_temp['mois'] = rel_temp['date'].dt.to_period('M').astype(str)
-
-                        selected_types = st.multiselect("Filtrer les types de relation :", 
-                                                        sorted(rel_temp['relation'].unique()), 
-                                                        default=rel_temp['relation'].unique())
-
-                        filtered_temp = rel_temp[rel_temp['relation'].isin(selected_types)]
-                        monthly_rel = filtered_temp.groupby(['mois', 'relation']).size().reset_index(name='count')
-
-                        fig = px.line(
-                            monthly_rel, 
-                            x='mois', 
-                            y='count', 
-                            color='relation',
-                            title="📅 Volume mensuel par type de relation"
+                        rel_temp['période'] = rel_temp['date'].dt.to_period('M').astype(str)
+                        
+                        # Sélection dynamique des relations à afficher
+                        rel_to_show = st.multiselect(
+                            "Relations à visualiser :",
+                            options=sorted(rel_temp['relation'].unique()),
+                            default=sorted(rel_temp['relation'].unique())[:3]
                         )
-                        st.plotly_chart(fig, use_container_width=True)
+                        
+                        if rel_to_show:
+                            monthly_data = rel_temp[rel_temp['relation'].isin(rel_to_show)]
+                            monthly_data = monthly_data.groupby(['période', 'relation']).size().reset_index(name='volume')
+                            
+                            fig = px.area(
+                                monthly_data,
+                                x='période',
+                                y='volume',
+                                color='relation',
+                                title="Évolution mensuelle des relations",
+                                line_shape='spline'
+                            )
+                            st.plotly_chart(fig, use_container_width=True)
                     except Exception as e:
-                        st.warning("Impossible d’afficher l’évolution temporelle.")
-
-        # ================================
-        # TAB 3 — MOTS-CLÉS
-        # ================================
-        with tab3:
-            st.subheader("🧠 Analyse des mots-clés dans les relations")
-
-            if not relations_full.empty and 'relation' in relations_full.columns:
-                all_words = ' '.join(relations_full['relation'].astype(str)).split()
-                word_freq = Counter(all_words).most_common(40)
-
-                col1, col2 = st.columns([2, 1])
-
-                with col1:
-                    fig = px.bar(
-                        x=[w[0] for w in word_freq],
-                        y=[w[1] for w in word_freq],
-                        labels={'x': 'Mot', 'y': 'Fréquence'},
-                        title="📌 Fréquence des mots les plus utilisés"
-                    )
-                    st.plotly_chart(fig, use_container_width=True)
+                        st.error(f"Erreur dans l'analyse temporelle : {str(e)}")
 
     else:
-        st.warning("Aucune donnée disponible pour les statistiques.")
+        # Message d'erreur plus engageant
+        st.error("🔍 Aucune donnée disponible pour l'analyse")
+        st.markdown("""
+        <div style="background:#f0f2f6;padding:20px;border-radius:10px">
+            <h4 style="color:#2c3e50">Conseils :</h4>
+            <ul>
+                <li>Vérifiez que des documents ont été chargés</li>
+                <li>Assurez-vous que l'extraction d'entités a été exécutée</li>
+                <li>Essayez d'ajuster les paramètres de traitement</li>
+            </ul>
+        </div>
+        """, unsafe_allow_html=True)
+
 elif page == "Carte":
     st.title("🗺️ Visualisation cartographique des entités")
     
     if not entities_data.empty and 'Nom' in entities_data.columns:
-        from streamlit_folium import folium_static
-        import folium
-        from geopy.geocoders import Nominatim
-        from geopy.extra.rate_limiter import RateLimiter
-        from folium.plugins import MarkerCluster, HeatMap
-        import time
-
-        # Configuration initiale
+        # Configuration CSS pour une carte plus large
         st.markdown("""
         <style>
             .map-container {
@@ -1192,84 +1242,88 @@ elif page == "Carte":
                 border: 1px solid #e0e0e0;
                 overflow: hidden;
                 margin-bottom: 20px;
+                width: 100%;
+            }
+            .stProgress > div > div > div > div {
+                background-color: #4CAF50;
+            }
+            /* Élargissement de la carte */
+            .folium-map {
+                width: 100% !important;
+                height: 600px !important;
             }
         </style>
         """, unsafe_allow_html=True)
 
-        # Dictionnaire de cache pour les localisations déjà trouvées
+        # Initialisation du cache
         if 'location_cache' not in st.session_state:
             st.session_state.location_cache = {
-                # Exemple de cache initial
                 "Paris": (48.8566, 2.3522),
                 "New York": (40.7128, -74.0060),
-                "Londres": (51.5074, -0.1278)
+                "Londres": (51.5074, -0.1278),
+                "Berlin": (52.5200, 13.4050),
+                "Tokyo": (35.6762, 139.6503)
             }
 
         # Configuration de la carte
-        with st.expander("⚙️ Paramètres", expanded=True):
-            col1, col2 = st.columns(2)
+        with st.expander("⚙️ Paramètres cartographiques", expanded=True):
+            col1, col2 = st.columns([2, 1])
             with col1:
                 map_type = st.selectbox("Type de carte", 
-                                      ["OpenStreetMap", "Stamen Terrain", "CartoDB positron"])
+                                      ["OpenStreetMap", "Stamen Terrain", "CartoDB positron"],
+                                      index=2)
                 zoom = st.slider("Niveau de zoom", 1, 15, 5)
             with col2:
                 cluster = st.checkbox("Regrouper les marqueurs", True)
                 heatmap = st.checkbox("Afficher heatmap", False)
-                show_missing = st.checkbox("Afficher les entités non trouvées", False)
 
-        # Filtrer les entités géographiques
-        geo_types = ['ville', 'city', 'pays', 'country', 'lieu', 'location', 'loc', 'place', 'region']
-        geo_entities = entities_data[
-            entities_data['Type'].str.lower().isin(geo_types)
-        ].copy()
+        # Filtrage des entités géographiques
+        @st.cache_data
+        def filter_geo_entities(data):
+            geo_types = ['ville', 'city', 'pays', 'country', 'lieu', 'location', 'loc', 'place', 'region']
+            return data[data['Type'].str.lower().isin(geo_types)].copy()
+
+        geo_entities = filter_geo_entities(entities_data)
 
         if geo_entities.empty:
             st.warning("Aucune entité géographique trouvée dans les données.")
             st.stop()
 
-        # Initialisation du géocodeur
-        geolocator = Nominatim(user_agent="geo_dashboard", timeout=10)
-        geocode = RateLimiter(geolocator.geocode, min_delay_seconds=1)
-
-        # Fonction de géocodage avec cache
-        def get_location(entity_name):
-            # Vérifier d'abord dans le cache
-            if entity_name in st.session_state.location_cache:
-                return st.session_state.location_cache[entity_name]
-            
-            try:
-                location = geocode(entity_name)
-                if location:
-                    coord = (location.latitude, location.longitude)
-                    st.session_state.location_cache[entity_name] = coord
-                    return coord
-            except Exception as e:
-                st.warning(f"Erreur de géocodage pour {entity_name}: {str(e)}")
-            return None
-
-        # Géocodage des entités
+        # Géocodage avec barre de progression
         progress_bar = st.progress(0)
         status_text = st.empty()
         
         valid_entities = []
         missing_entities = []
         
+        geolocator = Nominatim(user_agent="geo_dashboard", timeout=5)
+        geocode = RateLimiter(geolocator.geocode, min_delay_seconds=0.5, max_retries=2)
+
         for i, row in geo_entities.iterrows():
-            entity_name = str(row['Nom']).strip()
-            coord = get_location(entity_name)
+            clean_name = str(row['Nom']).strip().split('(')[0].split('-')[0].strip()
+            
+            if clean_name in st.session_state.location_cache:
+                coord = st.session_state.location_cache[clean_name]
+            else:
+                try:
+                    location = geocode(clean_name, exactly_one=True, language='fr')
+                    coord = (location.latitude, location.longitude) if location else None
+                    if coord:
+                        st.session_state.location_cache[clean_name] = coord
+                except:
+                    coord = None
             
             if coord:
                 valid_entities.append({
-                    'name': entity_name,
+                    'name': clean_name,
                     'type': row['Type'],
                     'count': row.get('Occurrences', 1),
                     'lat': coord[0],
                     'lon': coord[1]
                 })
             else:
-                missing_entities.append(entity_name)
+                missing_entities.append(clean_name)
             
-            # Mise à jour de la progression
             progress = (i + 1) / len(geo_entities)
             progress_bar.progress(min(progress, 1.0))
             status_text.text(f"Traitement {i+1}/{len(geo_entities)} - Trouvées: {len(valid_entities)}")
@@ -1281,112 +1335,150 @@ elif page == "Carte":
             st.error("Aucune localisation n'a pu être déterminée")
             st.stop()
 
-        # Création de la carte
+        # Création de la carte élargie
         m = folium.Map(
             location=[valid_entities[0]['lat'], valid_entities[0]['lon']],
             zoom_start=zoom,
             tiles=map_type,
-            control_scale=True
+            control_scale=True,
+            prefer_canvas=True
         )
 
-        # Cluster de marqueurs si activé
-        if cluster:
+        # Cluster de marqueurs
+        if cluster and len(valid_entities) > 10:
             marker_cluster = MarkerCluster().add_to(m)
 
         # Ajout des marqueurs
         for loc in valid_entities:
-            popup_content = f"""
-            <div style="width: 250px;">
-                <h4 style="margin-bottom: 5px;">{loc['name']}</h4>
-                <hr style="margin: 5px 0;">
-                <p><b>Type:</b> {loc['type']}</p>
-                <p><b>Mentions:</b> {loc['count']}</p>
-            </div>
-            """
-            
-            icon = folium.Icon(
-                icon='map-marker',
-                color='blue' if loc['count'] > 5 else 'green',
-                prefix='fa'
-            )
+            popup = f"<b>{loc['name']}</b><br>Type: {loc['type']}<br>Mentions: {loc['count']}"
+            icon_color = 'red' if loc['count'] > 10 else 'blue' if loc['count'] > 5 else 'green'
             
             marker = folium.Marker(
                 [loc['lat'], loc['lon']],
-                popup=folium.Popup(popup_content, max_width=300),
-                tooltip=f"{loc['name']} ({loc['count']})",
-                icon=icon
+                popup=popup,
+                icon=folium.Icon(color=icon_color, icon='info-sign')
             )
             
-            if cluster:
+            if cluster and len(valid_entities) > 10:
                 marker.add_to(marker_cluster)
             else:
                 marker.add_to(m)
 
-        # Heatmap si activée
+        # Heatmap
         if heatmap:
             heat_data = [[loc['lat'], loc['lon'], loc['count']] for loc in valid_entities]
             HeatMap(heat_data, radius=15).add_to(m)
 
-        # Contrôles utiles
-        folium.plugins.Fullscreen().add_to(m)
-        folium.plugins.MousePosition().add_to(m)
+        # Contrôles
+        folium.plugins.Fullscreen(position="topright").add_to(m)
 
-        # Affichage de la carte
+        # Affichage de la carte élargie
         with st.container():
             st.markdown("<div class='map-container'>", unsafe_allow_html=True)
-            folium_static(m, width=1000, height=600)
+            folium_static(m, width=1200, height=600)  # Carte plus large
             st.markdown("</div>", unsafe_allow_html=True)
 
-        # Statistiques
-        st.subheader("📊 Statistiques")
-        cols = st.columns(3)
-        cols[0].metric("Localisations trouvées", len(valid_entities))
-        cols[1].metric("Entités non trouvées", len(missing_entities))
-        cols[2].metric("Taux de succès", f"{len(valid_entities)/len(geo_entities)*100:.1f}%")
+        # Section statistiques améliorée
+        st.subheader("📊 Statistiques de géolocalisation")
+        
+        # Calcul des indicateurs
+        success_rate = len(valid_entities) / len(geo_entities) * 100
+        avg_mentions = sum(loc['count'] for loc in valid_entities) / len(valid_entities) if valid_entities else 0
+        top_entity = max(valid_entities, key=lambda x: x['count']) if valid_entities else None
+        
+        # Affichage en colonnes
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("Entités analysées", len(geo_entities))
+        col2.metric("Localisations trouvées", len(valid_entities), f"{success_rate:.1f}%")
+        col3.metric("Mentions moyennes", f"{avg_mentions:.1f}")
+        
+        if top_entity:
+            col4.metric("Entité la plus mentionnée", 
+                       f"{top_entity['name']}",
+                       f"{top_entity['count']} mentions")
 
-        # Affichage des entités non trouvées
-        if show_missing and missing_entities:
-            with st.expander("🔍 Entités non localisées"):
-                st.write("Ces entités n'ont pas pu être géolocalisées :")
-                st.write(missing_entities)
-                
-                # Bouton pour ajouter manuellement au cache
-                selected_missing = st.selectbox("Sélectionner une entité à ajouter manuellement", 
-                                              missing_entities)
-                col_lat, col_lon = st.columns(2)
-                with col_lat:
-                    manual_lat = st.number_input("Latitude", value=0.0)
-                with col_lon:
-                    manual_lon = st.number_input("Longitude", value=0.0)
-                
-                if st.button("Ajouter au cache"):
-                    st.session_state.location_cache[selected_missing] = (manual_lat, manual_lon)
-                    st.success(f"{selected_missing} ajouté au cache avec les coordonnées ({manual_lat}, {manual_lon})")
+        # Graphique supplémentaire
+        st.markdown("### 📈 Répartition par type d'entité")
+        type_counts = pd.DataFrame(valid_entities)['type'].value_counts()
+        fig = px.pie(type_counts, 
+                    names=type_counts.index, 
+                    values=type_counts.values,
+                    hole=0.4)
+        st.plotly_chart(fig, use_container_width=True)
 
         # Export des données
-        if st.button("💾 Exporter les localisations trouvées"):
-            df = pd.DataFrame(valid_entities)
-            csv = df.to_csv(index=False).encode('utf-8')
-            st.download_button(
-                label="Télécharger CSV",
-                data=csv,
-                file_name="localisations_trouvees.csv",
-                mime="text/csv"
-            )
-            
-        if st.button("💾 Exporter le cache des localisations"):
-            cache_df = pd.DataFrame.from_dict(st.session_state.location_cache, 
-                                            orient='index',
-                                            columns=['Latitude', 'Longitude'])
-            cache_df.reset_index(inplace=True)
-            cache_df.rename(columns={'index': 'Nom'}, inplace=True)
-            csv = cache_df.to_csv(index=False).encode('utf-8')
-            st.download_button(
-                label="Télécharger Cache",
-                data=csv,
-                file_name="cache_localisations.csv",
-                mime="text/csv"
-            )
+        with st.expander("💾 Exporter les données", expanded=False):
+            if valid_entities:
+                df = pd.DataFrame(valid_entities)
+                csv = df.to_csv(index=False).encode('utf-8')
+                st.download_button(
+                    "Télécharger les localisations (CSV)",
+                    data=csv,
+                    file_name="localisations_trouvees.csv",
+                    mime="text/csv"
+                )
     else:
         st.warning("Aucune donnée géographique disponible")
 
+elif page == "Export":
+    st.title("📤 Export des données")
+    
+    # Export des entités
+    if not entities_data.empty:
+        st.subheader("Export des entités")
+        
+        csv = entities_data.to_csv(index=False).encode('utf-8')
+        st.download_button(
+            label="💾 Télécharger en CSV",
+            data=csv,
+            file_name="entites.csv",
+            mime="text/csv"
+        )
+        
+        # Option JSON
+        json_data = entities_data.to_json(orient='records', force_ascii=False)
+        st.download_button(
+            label="💾 Télécharger en JSON",
+            data=json_data,
+            file_name="entites.json",
+            mime="application/json"
+        )
+    
+    # Export des relations
+    if entity_relations:
+        st.subheader("Export des relations")
+        
+        relations_df = pd.DataFrame(entity_relations, columns=["Source", "Cible", "Type"])
+        csv = relations_df.to_csv(index=False).encode('utf-8')
+        st.download_button(
+            label="💾 Télécharger en CSV",
+            data=csv,
+            file_name="relations.csv",
+            mime="text/csv"
+        )
+    
+    # Export complet
+    if not relations_full.empty:
+        st.subheader("Export complet")
+        
+        csv = relations_full.to_csv(index=False).encode('utf-8')
+        st.download_button(
+            label="💾 Télécharger toutes les données (CSV)",
+            data=csv,
+            file_name="donnees_completes.csv",
+            mime="text/csv"
+        )
+        
+        # Option Excel
+        excel_buffer = BytesIO()
+        with pd.ExcelWriter(excel_buffer, engine='xlsxwriter') as writer:
+            entities_data.to_excel(writer, sheet_name='Entités', index=False)
+            pd.DataFrame(entity_relations, columns=["Source", "Cible", "Type"]).to_excel(writer, sheet_name='Relations', index=False)
+            relations_full.to_excel(writer, sheet_name='Données complètes', index=False)
+        
+        st.download_button(
+            label="💾 Télécharger en Excel",
+            data=excel_buffer.getvalue(),
+            file_name="export_complet.xlsx",
+            mime="application/vnd.ms-excel"
+        )
