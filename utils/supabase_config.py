@@ -64,13 +64,13 @@ class SupabaseManager:
         """Charge les données pour une langue spécifique"""
         entities = pd.DataFrame()
         for table in self._table_structure[lang]['entities']:
-            df = self.get_table(table)  # Changé ici (_get_table → get_table)
+            df = self.get_table(table)  
             if not df.empty:
                 entities = pd.concat([entities, df], ignore_index=True)
         
         relations = []
         for table in self._table_structure[lang]['relations']:
-            df = self.get_table(table)  # Changé ici (_get_table → get_table)
+            df = self.get_table(table)  
             if not df.empty:
                 source_col = next((c for c in df.columns if 'source' in c.lower()), None)
                 target_col = next((c for c in df.columns if 'target' in c.lower()), None)
@@ -86,15 +86,13 @@ class SupabaseManager:
         }
     
     def get_table(self, table_name: str) -> pd.DataFrame:
-        """Récupère l'intégralité d'une table avec pagination"""
+        """Version optimisée avec gestion de la pagination"""
         try:
-            # Initialisation
             all_data = []
+            page_size = 1000  # Taille de page recommandée par Supabase
             page = 0
-            page_size = 1000  # Taille de page raisonnable
             
             while True:
-                # Récupération paginée
                 response = (self.client.table(table_name)
                             .select("*")
                             .range(page * page_size, (page + 1) * page_size - 1)
@@ -106,13 +104,14 @@ class SupabaseManager:
                 all_data.extend(response.data)
                 page += 1
                 
-                # Optionnel : afficher la progression
-                print(f"Page {page} chargée - {len(response.data)} enregistrements")
+                # Optionnel : affichage plus propre de la progression
+                print(f"\rChargement : page {page} ({len(response.data)} enregistrements)", end="", flush=True)
                 
+            print()  # Nouvelle ligne après la progression
             return pd.DataFrame(all_data) if all_data else pd.DataFrame()
-            
+        
         except Exception as e:
-            print(f"Erreur sur la table {table_name}: {str(e)}")
+            print(f"\nErreur lors du chargement: {str(e)}")
             return pd.DataFrame()
 
 def get_supabase_manager():
