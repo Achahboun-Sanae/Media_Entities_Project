@@ -1231,10 +1231,10 @@ elif page == "Statistiques":
         """, unsafe_allow_html=True)
 
 elif page == "Carte":
-    st.title("🗺️ Visualisation Géographique des Entités")
+    st.title("🗺️ Visualisation cartographique des entités")
     
     if not entities_data.empty and 'Nom' in entities_data.columns:
-        # Configuration CSS améliorée
+        # Configuration CSS pour une carte plus large
         st.markdown("""
         <style>
             .map-container {
@@ -1244,6 +1244,10 @@ elif page == "Carte":
                 margin-bottom: 20px;
                 width: 100%;
             }
+            .stProgress > div > div > div > div {
+                background-color: #4CAF50;
+            }
+            /* Élargissement de la carte */
             .folium-map {
                 width: 100% !important;
                 height: 700px !important;
@@ -1265,12 +1269,6 @@ elif page == "Carte":
                 font-weight: 700;
                 color: #2c3e50;
             }
-            .stats-header {
-                font-size: 18px;
-                font-weight: 600;
-                margin-bottom: 15px;
-                color: #2c3e50;
-            }
         </style>
         """, unsafe_allow_html=True)
 
@@ -1279,70 +1277,38 @@ elif page == "Carte":
             st.session_state.location_cache = {}
 
         # Configuration de la carte
-        with st.expander("⚙️ Paramètres Cartographiques", expanded=True):
+        with st.expander("⚙️ Paramètres cartographiques", expanded=True):
             col1, col2, col3 = st.columns([2, 2, 1])
             with col1:
-                map_type = st.selectbox(
-                    "Type de carte", 
-                    ["OpenStreetMap", "Stamen Terrain", "CartoDB positron"],
-                    index=2
-                )
+                map_type = st.selectbox("Type de carte", 
+                                      ["OpenStreetMap", "Stamen Terrain", "CartoDB positron"],
+                                      index=2)
                 zoom = st.slider("Niveau de zoom", 1, 15, 5)
             with col2:
                 entity_types = st.multiselect(
                     "Types d'entités à afficher",
-                    options=['LOC', 'PER', 'ORG', 'EVENT'],
-                    default=['LOC', 'ORG'],
-                    help="Sélectionnez les types d'entités à visualiser"
+                    options=['LOC','ORG'],
+                    default=['LOC','ORG'],
+                    help="Sélectionnez les types d'entités à visualiser sur la carte"
                 )
             with col3:
                 cluster = st.checkbox("Regrouper les marqueurs", True)
                 heatmap = st.checkbox("Afficher heatmap", False)
 
-        # Filtrage intelligent des entités géographiques
+        # Filtrage des entités géographiques
         @st.cache_data
         def filter_geo_entities(data, entity_types):
-            # Filtre de base par types sélectionnés
-            filtered = data[data['Type'].isin(entity_types)].copy()
+            # Filter entities by selected types
+            geo_entities = data[data['Type'].isin(entity_types)].copy()
             
-            # Pour les organisations, on cherche des localisations associées
-            if 'ORG' in entity_types:
-                orgs = data[data['Type'] == 'ORG']
-                
-                # Trouver les relations ORG-LOC
-                org_locations = relations_full[
-                    ((relations_full['type_source'] == 'ORG') & 
-                     (relations_full['type_cible'] == 'LOC')) |
-                    ((relations_full['type_cible'] == 'ORG') & 
-                     (relations_full['type_source'] == 'LOC'))
-                ]
-                
-                # Ajouter les noms des localisations associées
-                orgs_with_locs = []
-                for _, row in orgs.iterrows():
-                    org_name = row['Nom']
-                    related_locs = org_locations[
-                        (org_locations['nom_source'] == org_name) | 
-                        (org_locations['nom_cible'] == org_name)
-                    ]
-                    
-                    if not related_locs.empty:
-                        loc_names = set()
-                        for _, rel in related_locs.iterrows():
-                            loc_name = rel['nom_cible'] if rel['nom_source'] == org_name else rel['nom_source']
-                            loc_names.add(loc_name)
-                        
-                        for loc_name in loc_names:
-                            orgs_with_locs.append({
-                                'Nom': org_name,
-                                'Type': 'ORG',
-                                'Occurrences': row['Occurrences'],
-                                'Location': loc_name
-                            })
+            # For persons and organizations, we'll look for associated locations
+            if 'LOC' in entity_types:
+                # Get all location entities
+                locations = data[data['Type'] == 'LOC']
+                # Combine with the filtered entities
+                geo_entities = pd.concat([geo_entities, locations]).drop_duplicates()
             
-            # Combiner avec les localisations directes
-            locs = data[data['Type'] == 'LOC']
-            return pd.concat([filtered, locs]).drop_duplicates()
+            return geo_entities
 
         geo_entities = filter_geo_entities(entities_data, entity_types)
 
@@ -1350,30 +1316,46 @@ elif page == "Carte":
             st.warning("Aucune entité géographique trouvée dans les données.")
             st.stop()
 
-        # Géocodage intelligent avec barre de progression
+        # Géocodage avec barre de progression
         progress_bar = st.progress(0)
         status_text = st.empty()
         
         valid_entities = []
         missing_entities = []
+        
         geolocator = Nominatim(user_agent="geo_dashboard", timeout=10)
-        geocode = RateLimiter(geolocator.geocode, min_delay_seconds=1, max_retries=2)
+        geocode = RateLimiter(geolocator.geocode, min_delay_seconds=0.5, max_retries=3)
 
         for i, row in geo_entities.iterrows():
             clean_name = str(row['Nom']).strip().split('(')[0].split('-')[0].strip()
             
-            # Vérifier le cache
+            # Vérifier si l'entité est déjà dans le cache
             if clean_name in st.session_state.location_cache:
                 coord = st.session_state.location_cache[clean_name]
             else:
                 try:
-                    # Pour les organisations, utiliser la localisation associée si disponible
-                    if row['Type'] == 'ORG' and hasattr(row, 'Location'):
-                        location = geocode(row['Location'], exactly_one=True, language='fr')
+                    # Pour les personnes et organisations, chercher leur ville/pays associé
+                    if row['Type'] in ['PER', 'ORG']:
+                        # Recherche dans les relations pour trouver une localisation associée
+                        related_locations = relations_full[
+                            ((relations_full['nom_source'] == row['Nom']) & 
+                             (relations_full['type_cible'] == 'LOC')) |
+                            ((relations_full['nom_cible'] == row['Nom']) & 
+                             (relations_full['type_source'] == 'LOC'))
+                        ]
+                        
+                        if not related_locations.empty:
+                            location_name = related_locations.iloc[0]['nom_cible'] if \
+                                related_locations.iloc[0]['nom_source'] == row['Nom'] else \
+                                related_locations.iloc[0]['nom_source']
+                            location = geocode(location_name, exactly_one=True, language='fr')
+                            coord = (location.latitude, location.longitude) if location else None
+                        else:
+                            coord = None
                     else:
+                        # Pour les lieux, géocoder directement
                         location = geocode(clean_name, exactly_one=True, language='fr')
-                    
-                    coord = (location.latitude, location.longitude) if location else None
+                        coord = (location.latitude, location.longitude) if location else None
                     
                     if coord:
                         st.session_state.location_cache[clean_name] = coord
@@ -1386,8 +1368,7 @@ elif page == "Carte":
                     'type': row['Type'],
                     'count': row.get('Occurrences', 1),
                     'lat': coord[0],
-                    'lon': coord[1],
-                    'location': coord
+                    'lon': coord[1]
                 })
             else:
                 missing_entities.append(clean_name)
@@ -1403,30 +1384,29 @@ elif page == "Carte":
             st.error("Aucune localisation n'a pu être déterminée")
             st.stop()
 
-        # Création de la carte
+        # Création de la carte élargie
         m = folium.Map(
             location=[valid_entities[0]['lat'], valid_entities[0]['lon']],
             zoom_start=zoom,
             tiles=map_type,
-            control_scale=True
+            control_scale=True,
+            prefer_canvas=True
         )
 
         # Cluster de marqueurs
         if cluster and len(valid_entities) > 10:
             marker_cluster = MarkerCluster().add_to(m)
 
-        # Icônes personnalisées
+        # Définition des icônes par type d'entité
         icon_dict = {
-            'LOC': {'icon': 'map-marker', 'color': 'red', 'prefix': 'fa'},
-            'ORG': {'icon': 'building', 'color': 'green', 'prefix': 'fa'},
-            'PER': {'icon': 'user', 'color': 'blue', 'prefix': 'fa'},
-            'EVENT': {'icon': 'calendar', 'color': 'orange', 'prefix': 'fa'}
+            'LOC': {'icon': 'map-marker', 'color': 'blue'},
+          
+            'ORG': {'icon': 'building', 'color': 'green'},
+          
         }
 
-        # Ajout des marqueurs
+        # Ajout des marqueurs avec icônes personnalisées
         for loc in valid_entities:
-            icon_config = icon_dict.get(loc['type'], {'icon': 'info', 'color': 'gray', 'prefix': 'fa'})
-            
             popup_content = f"""
             <div style="font-family: Arial; min-width: 200px;">
                 <h4 style="margin:0; color: #2c3e50;">{loc['name']}</h4>
@@ -1436,10 +1416,14 @@ elif page == "Carte":
             </div>
             """
             
+            icon_settings = icon_dict.get(loc['type'], {'icon': 'info-sign', 'color': 'gray'})
+            
+            # Création d'icônes personnalisées
             icon = folium.Icon(
-                icon=icon_config['icon'],
-                color=icon_config['color'],
-                prefix=icon_config['prefix']
+                icon=icon_settings['icon'],
+                color=icon_settings['color'],
+                icon_color='white',
+                prefix='fa'  # Utilisation de Font Awesome
             )
             
             marker = folium.Marker(
@@ -1464,36 +1448,22 @@ elif page == "Carte":
         folium.plugins.MiniMap(toggle_display=True).add_to(m)
         folium.plugins.MeasureControl(position='bottomleft').add_to(m)
 
-        # Affichage de la carte
+        # Affichage de la carte élargie
         with st.container():
             st.markdown("<div class='map-container'>", unsafe_allow_html=True)
-            folium_static(m, width=1200, height=700)
+            folium_static(m, width=1200, height=700)  # Carte plus large
             st.markdown("</div>", unsafe_allow_html=True)
 
-        # Statistiques avancées
-        st.subheader("📊 Statistiques Avancées")
+        # Section statistiques améliorée
+        st.subheader("📊 Statistiques de géolocalisation")
         
         # Calcul des indicateurs
         success_rate = len(valid_entities) / len(geo_entities) * 100
         avg_mentions = sum(loc['count'] for loc in valid_entities) / len(valid_entities) if valid_entities else 0
         top_entity = max(valid_entities, key=lambda x: x['count']) if valid_entities else None
+        coverage = len(set([(loc['lat'], loc['lon']) for loc in valid_entities])) / len(valid_entities) * 100
         
-        # Nouveau: Calcul de la dispersion géographique
-        if len(valid_entities) >= 2:
-            from geopy.distance import geodesic
-            locations = [(loc['lat'], loc['lon']) for loc in valid_entities]
-            distances = []
-            for i in range(len(locations)):
-                for j in range(i+1, len(locations)):
-                    distances.append(geodesic(locations[i], locations[j]).km)
-            
-            avg_distance = sum(distances) / len(distances) if distances else 0
-            max_distance = max(distances) if distances else 0
-        else:
-            avg_distance = 0
-            max_distance = 0
-
-        # Affichage des métriques
+        # Affichage en colonnes
         col1, col2, col3, col4 = st.columns(4)
         with col1:
             st.markdown("""
@@ -1506,96 +1476,102 @@ elif page == "Carte":
         with col2:
             st.markdown("""
             <div class="metric-card">
-                <div class="metric-title">Taux de réussite</div>
-                <div class="metric-value">{:.1f}%</div>
-                <small>{:,} localisations trouvées</small>
+                <div class="metric-title">Localisations trouvées</div>
+                <div class="metric-value">{:,}</div>
+                <small>{:.1f}% de réussite</small>
             </div>
-            """.format(success_rate, len(valid_entities)), unsafe_allow_html=True)
+            """.format(len(valid_entities), success_rate), unsafe_allow_html=True)
         
         with col3:
             st.markdown("""
             <div class="metric-card">
-                <div class="metric-title">Distance moyenne</div>
-                <div class="metric-value">{:.1f} km</div>
-                <small>Entre les localisations</small>
+                <div class="metric-title">Mentions moyennes</div>
+                <div class="metric-value">{:.1f}</div>
             </div>
-            """.format(avg_distance), unsafe_allow_html=True)
+            """.format(avg_mentions), unsafe_allow_html=True)
         
         with col4:
             st.markdown("""
             <div class="metric-card">
-                <div class="metric-title">Distance max</div>
-                <div class="metric-value">{:.1f} km</div>
-                <small>Entre deux points</small>
+                <div class="metric-title">Couverture géographique</div>
+                <div class="metric-value">{:.1f}%</div>
             </div>
-            """.format(max_distance), unsafe_allow_html=True)
+            """.format(coverage), unsafe_allow_html=True)
 
-        # Graphiques avancés
-        st.markdown("### 📈 Analyses Complémentaires")
+        if top_entity:
+            st.markdown(f"""
+            <div class="metric-card" style="margin-top: 15px;">
+                <div class="metric-title">Entité la plus mentionnée</div>
+                <div class="metric-value">{top_entity['name']}</div>
+                <small>{top_entity['count']} mentions • {top_entity['type']}</small>
+            </div>
+            """, unsafe_allow_html=True)
+
+        # Graphiques supplémentaires
+        st.markdown("### 📈 Analyses complémentaires")
         
-        tab1, tab2, tab3 = st.tabs(["Répartition", "Top Entités", "Couverture Géographique"])
+        tab1, tab2, tab3 = st.tabs(["Répartition par type", "Top localisations", "Couverture géographique"])
         
         with tab1:
-            # Répartition par type et par région
             type_counts = pd.DataFrame(valid_entities)['type'].value_counts()
-            fig1 = px.pie(
+            fig = px.pie(
                 type_counts, 
                 names=type_counts.index, 
                 values=type_counts.values,
                 hole=0.4,
-                title="Répartition par type d'entité"
+                title="Répartition des entités localisées par type"
             )
-            st.plotly_chart(fig1, use_container_width=True)
-
+            st.plotly_chart(fig, use_container_width=True)
+        
         with tab2:
-            # Top 10 des entités les plus mentionnées
-            top_entities = pd.DataFrame(valid_entities).sort_values('count', ascending=False).head(10)
-            fig2 = px.bar(
-                top_entities,
-                x='count',
-                y='name',
-                orientation='h',
+            top_locations = pd.DataFrame(valid_entities).sort_values('count', ascending=False).head(10)
+            fig = px.bar(
+                top_locations,
+                x='name',
+                y='count',
                 color='type',
                 title="Top 10 des entités les plus mentionnées",
                 labels={'name': 'Entité', 'count': 'Nombre de mentions'}
             )
-            st.plotly_chart(fig2, use_container_width=True)
-
+            st.plotly_chart(fig, use_container_width=True)
+        
         with tab3:
-            # Carte de densité par pays
+            # Création d'une carte de densité par pays/région
             try:
                 from geopy.extra.rate_limiter import RateLimiter
+                from geopy.exc import GeocoderTimedOut
                 
-                # Récupération des pays
-                reverse_geocode = RateLimiter(geolocator.reverse, min_delay_seconds=1)
+                # Récupération des pays pour chaque localisation
+                reverse_geocode = RateLimiter(geolocator.reverse, min_delay_seconds=0.5)
+                
                 countries = []
-                
                 for loc in valid_entities:
                     try:
-                        location = reverse_geocode((loc['lat'], loc['lon']), exactly_one=True, language='fr')
-                        country = location.raw.get('address', {}).get('country', 'Inconnu')
+                        location = reverse_geocode((loc['lat'], loc['lon']), exactly_one=True, language='en')
+                        address = location.raw.get('address', {})
+                        country = address.get('country', 'Inconnu')
                         countries.append(country)
-                    except:
+                    except (GeocoderTimedOut, AttributeError):
                         countries.append('Inconnu')
                 
                 country_counts = pd.Series(countries).value_counts().reset_index()
-                country_counts.columns = ['Pays', 'Nombre']
+                country_counts.columns = ['Pays', 'Nombre d\'entités']
                 
-                fig3 = px.choropleth(
+                fig = px.choropleth(
                     country_counts,
                     locations='Pays',
                     locationmode='country names',
-                    color='Nombre',
+                    color='Nombre d\'entités',
                     hover_name='Pays',
                     color_continuous_scale='Blues',
                     title="Répartition géographique par pays"
                 )
-                st.plotly_chart(fig3, use_container_width=True)
+                st.plotly_chart(fig, use_container_width=True)
             except Exception as e:
-                st.warning(f"Impossible de générer la carte des pays : {str(e)}")
+                st.warning(f"Impossible d'afficher la carte des pays : {str(e)}")
 
         # Export des données
-        with st.expander("💾 Exporter les Données", expanded=False):
+        with st.expander("💾 Exporter les données", expanded=False):
             if valid_entities:
                 df = pd.DataFrame(valid_entities)
                 
@@ -1603,9 +1579,9 @@ elif page == "Carte":
                 with col1:
                     csv = df.to_csv(index=False).encode('utf-8')
                     st.download_button(
-                        "Télécharger en CSV",
+                        "Télécharger les localisations (CSV)",
                         data=csv,
-                        file_name="localisations.csv",
+                        file_name="localisations_trouvees.csv",
                         mime="text/csv"
                     )
                 
