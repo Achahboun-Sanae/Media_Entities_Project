@@ -500,7 +500,7 @@ if page == "Tableau de bord":
 
     # 4. Répartition des types d'entités (avec données filtrées)
     if not filtered_entities.empty:
-        st.subheader("📦 Types d'entités")
+        st.subheader("🏷️ Types d'entités")
             
         entity_counts = filtered_entities['Type'].value_counts().reset_index()
         entity_counts.columns = ['Type', 'Nombre']
@@ -635,20 +635,14 @@ elif page == "Entités":
                 with tab1:
                     if not source_relations.empty:
                         st.dataframe(source_relations, use_container_width=True)
-                        rel_counts = source_relations['relation'].value_counts()
-                        fig = px.pie(rel_counts, values=rel_counts.values, names=rel_counts.index,
-                                     title="Types de relations sortantes")
-                        st.plotly_chart(fig, use_container_width=True)
+                        # Suppression du diagramme pour les relations sortantes
                     else:
                         st.info("Aucune relation sortante trouvée.")
 
                 with tab2:
                     if not target_relations.empty:
                         st.dataframe(target_relations, use_container_width=True)
-                        rel_counts = target_relations['relation'].value_counts()
-                        fig = px.pie(rel_counts, values=rel_counts.values, names=rel_counts.index,
-                                     title="Types de relations entrantes")
-                        st.plotly_chart(fig, use_container_width=True)
+                        # Suppression du diagramme pour les relations entrantes
                     else:
                         st.info("Aucune relation entrante trouvée.")
 
@@ -739,18 +733,6 @@ elif page == "Articles":
             fig.update_traces(
                 textinfo="label+value+percent parent",
                 hovertemplate="<b>%{label}</b><br>Mentions: %{value}<br>Part: %{percentParent:.1%}"
-            )
-            st.plotly_chart(fig, use_container_width=True)
-
-            # Types de relations
-            st.subheader("🔗 Répartition des types de relations")
-            rel_counts = source_data['relation'].value_counts()
-
-            fig = px.pie(
-                rel_counts,
-                names=rel_counts.index,
-                values=rel_counts.values,
-                title="Types de relations dans les articles"
             )
             st.plotly_chart(fig, use_container_width=True)
 
