@@ -64,13 +64,13 @@ class SupabaseManager:
         """Charge les données pour une langue spécifique"""
         entities = pd.DataFrame()
         for table in self._table_structure[lang]['entities']:
-            df = self.get_table(table)  # Changé ici (_get_table → get_table)
+            df = self.get_table(table)  
             if not df.empty:
                 entities = pd.concat([entities, df], ignore_index=True)
         
         relations = []
         for table in self._table_structure[lang]['relations']:
-            df = self.get_table(table)  # Changé ici (_get_table → get_table)
+            df = self.get_table(table)  
             if not df.empty:
                 source_col = next((c for c in df.columns if 'source' in c.lower()), None)
                 target_col = next((c for c in df.columns if 'target' in c.lower()), None)
